@@ -1,0 +1,9 @@
+id: 'highway-v0'
+import_module: 'highway_env'
+observation:
+    type: 'GrayscaleObservation'
+    observation_shape: !!python/tuple [128, 64]
+    stack_size: 4
+    weights: !!python/list [0.2989, 0.5870, 0.1140]
+    scaling: !!float 1.75
+name: 'highway_env_rgb'

@@ -1,0 +1,6 @@
+id: highway-v0
+import_module: highway_env
+show_trajectories: false
+action:
+    type: ContinuousAction
+name: highway_env_continuous_actions
