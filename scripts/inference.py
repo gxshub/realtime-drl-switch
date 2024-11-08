@@ -5,11 +5,10 @@ Usage:
 
 Options:
   -h --help              Show this screen.
-  --episodes <count>     Number of episodes [default: 5].
-  --processes <count>    Number of running processes [default: 4].
+  --episodes <count>     Number of episodes [default: 4].
+  --processes <count>    Number of running processes [default: 1].
+  --rtc <time>           Random seed for rea-ltime computing. If 0, not real-time. [default: 0]
   --no-display           Disable environment, agent, and rewards rendering.
-  --repeat <count>       Repeat several times [default: 1].
-  --delay <time>        If delay >= 0, the inference is at real time. [default: 0]
   --safeguarded         Whether the system is safeguarded or not.
   --test              Do not save model or log in the test mode.
 """
@@ -28,6 +27,7 @@ from tqdm import tqdm
 from rt_drl_safeguard.safeguard.highway_safeguard import HighwayAgentSafeguard
 from rt_drl_safeguard.utils.factory import load_agent_class, load_environment
 from rt_drl_safeguard.utils.randomization import exp_delay
+from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
 
 Agent = TypeVar("Agent")
 OUTPUT_FOLDER = "infer_results"
@@ -39,9 +39,9 @@ def main():
     agent_config_file = opts['<agent>']
     model_file = opts['<checkpoint>']
     n_episodes = int(opts['--episodes'])
-    delay = float(opts['--delay'])
-    if delay < 0:
-        raise ValueError("delay must be a non-negative value")
+    rtc_seed = float(opts['--rtc'])
+    if rtc_seed < 0:
+        raise ValueError("rtc seed must be a non-negative value")
     safeguarded = opts['--safeguarded']
     n_proc = int(opts['--processes'])
     test_mode = opts['--test']
@@ -50,7 +50,6 @@ def main():
     test_result_folder = Path(model_file).parent / OUTPUT_FOLDER / version
 
     if test_mode:
-        n_episodes = 4
         logger = configure(None, ['stdout'])
     else:
         logger = configure(str(test_result_folder), ['stdout', 'log'])
@@ -60,12 +59,15 @@ def main():
                "\nAgent configuration:\n{}".format(open(agent_config_file).read()),
                "\nLoad checkpoint file from: {}\n".format(model_file))
 
-    # env, _ = load_environment(env_config_file, training=False, n_envs=1)
-    # rt_env = RealtimeHighway(env)
-    env, _ = load_environment(env_config_file, training=False, n_envs=n_proc, realtime=True)
     agent = load_agent_class(agent_config_file).load(Path(model_file))
-    # avg_epi_rew, avg_epi_len, crash_rate = infer(rt_env, agent, n_episodes, delay, safeguarded)
-    avg_epi_rew, avg_epi_len, crash_rate = infer_vec(env, agent, n_episodes, delay, safeguarded)
+
+    if n_proc == 1:
+        env, _ = load_environment(env_config_file, training=False, n_envs=n_proc)
+        env = RealtimeHighway(env)
+        avg_epi_rew, avg_epi_len, crash_rate = infer(env, agent, n_episodes, rtc_seed, safeguarded)
+    else:
+        env, _ = load_environment(env_config_file, training=False, n_envs=n_proc, realtime=True)
+        avg_epi_rew, avg_epi_len, crash_rate = infer_vec(env, agent, n_episodes, rtc_seed, safeguarded)
 
     logger.log("----------------------\nNumber of episodes: {}".format(n_episodes),
                "\nAverage episode accumulated reward: {}".format(avg_epi_rew),
@@ -76,20 +78,20 @@ def main():
 def infer_vec(env,
               agent: "Agent",
               n_episodes: int,
-              delay: float = 0,
-              safeguarded: bool = False,
+              rtc_seed: float = 0,
+              with_safeguard: bool = False,
               deterministic: bool = True,
               render: bool = False,
               callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
               warn: bool = True,
               ):
     """
-        Inference in a realtime environment.
+        Inference in a real-time environment.
 
-    Note: This function is based on evaluate_policy() in sb3.
+    This function is based on evaluate_policy() in sb3.
     https://stable-baselines3.readthedocs.io/en/master/_modules/stable_baselines3/common/evaluation.html#evaluate_policy
 
-    .. note::
+    note::
         If environment has not been wrapped with ``Monitor`` wrapper, reward and
         episode lengths are counted as it appears with ``env.step`` calls. If
         the environment contains wrappers that modify rewards or episode lengths
@@ -99,8 +101,10 @@ def infer_vec(env,
 
     :param env
     :param agent
-    :param n_episodes
+    :param n_episodes: Number of episodes
+    :param rtc_seed: randomization seed for real-time computing
     :param deterministic: Whether to use deterministic or stochastic actions
+    :param with_safeguard
     :param render: Whether to render the environment or not
     :param callback: callback function to do additional checks,
         called after each step. Gets locals() and globals() passed as parameters.
@@ -111,7 +115,6 @@ def infer_vec(env,
         list containing per-episode rewards and second containing per-episode lengths
         (in number of steps).
     """
-    assert delay >= 0
     is_monitor_wrapped = False
     # Avoid circular import
     from stable_baselines3.common.monitor import Monitor
@@ -146,6 +149,7 @@ def infer_vec(env,
     episode_starts = np.ones((env.num_envs,), dtype=bool)
 
     pbar = tqdm(total=n_episodes)
+    with_delay = True if rtc_seed > 0 else False
     while (episode_counts < episode_count_targets).any():
         # eval_logger.log("Episode counts: {}".format(episode_counts))
         actions, states = agent.predict(
@@ -154,6 +158,14 @@ def infer_vec(env,
             episode_start=episode_starts,
             deterministic=deterministic,
         )
+
+        if with_delay:
+            # sample n_envs delays
+            delays = exp_delay(rtc_seed, n_envs)
+            for i in range(n_envs):
+                env.env_method("set_delay", delays[i], indices=[i])
+                # print("delay in env {}: {}".format(i, env.env_method("get_wrapper_attr", "delay", indices=[i])))
+                
         new_observations, rewards, dones, infos = env.step(actions)
         current_rewards += rewards
         current_lengths += 1
@@ -164,13 +176,6 @@ def infer_vec(env,
                 done = dones[i]
                 info = infos[i]
                 episode_starts[i] = done
-
-                if delay > 0:
-                    # sample n_envs delays
-                    delays = exp_delay(delay, n_envs)
-                    for j in range(n_envs):
-                        env.set_attr("delay", delays[j], indices=[j])
-                        # print("delay in env {}: {}".format(j, env.get_attr("delay", indices=[j])))
 
                 if callback is not None:
                     callback(locals(), globals())
@@ -194,7 +199,7 @@ def infer_vec(env,
                         episode_counts[i] += 1
                     current_rewards[i] = 0
                     current_lengths[i] = 0
-                    if env.env_method("get_wrapper_attr", "vehicle", indices=[i])[0].crashed:
+                    if info['crashed']:
                         n_crashes += 1
                     pbar.update(1)
 
@@ -210,25 +215,26 @@ def infer_vec(env,
 def infer(env,
           agent: "Agent",
           n_episodes: int,
-          delay: float = 0,
-          safeguarded: bool = False):
-    assert delay >= 0
+          rtc_seed: float = 0,
+          with_safeguard: bool = False):
     sg = HighwayAgentSafeguard(env)
     episode_rewards = []
     episode_lengths = []
     n_crashes = 0
+    with_delay = True if rtc_seed > 0 else False
     for _ in tqdm(range(n_episodes)):
         reward_acc = 0.
         timestep = 0
         done = truncated = False
         obs, info = env.reset()
         sg.update()
+        delay = 0
         while not (done or truncated):
             action, _states = agent.predict(obs, deterministic=True)
-            if delay > 0:
+            if with_delay:
                 # randomize delay
-                delay = exp_delay(delay)
-            if safeguarded:
+                delay = exp_delay(rtc_seed)
+            if with_safeguard:
                 action, delay, _ = sg.assure(action, delay)
             env.delay = delay
             obs, reward, done, truncated, info = env.step(action)

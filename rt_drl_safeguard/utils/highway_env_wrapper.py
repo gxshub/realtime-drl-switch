@@ -15,10 +15,24 @@ class RealtimeHighway(Wrapper):
     def step(
             self, action: WrapperActType
     ) -> Tuple[WrapperObsType, SupportsFloat, bool, bool, Dict[str, Any]]:
-        self.delayed_frequency = int(self.delay * self.config["simulation_frequency"])
+        self.delayed_frequency = int(self.delay * self.env.unwrapped.config["simulation_frequency"])
+        # print("[RealtimeHighway] delay: {}, delayed_frequency: {}".format(self.delay, self.delayed_frequency))
         for _ in range(self.delayed_frequency):
             self.env.unwrapped.road.act()
-            self.env.unwrapped.road.step(1 / self.config["simulation_frequency"])
+            self.env.unwrapped.road.step(1 / self.env.unwrapped.config["simulation_frequency"])
             self.env.unwrapped._automatic_rendering()
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, reward, terminated, truncated, info
+
+    @property
+    def delay(self) -> float:
+        return self._delay
+
+    @delay.setter
+    def delay(self, value):
+        self._delay = value
+
+    def set_delay(self, value):
+        self._delay = value
+
+
