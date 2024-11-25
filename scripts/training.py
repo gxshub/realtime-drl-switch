@@ -18,7 +18,7 @@ from docopt import docopt
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
 
-from utils.factory import load_agent, load_environment
+from rt_drl_safeguard.utils.factory import load_agent, load_environment
 
 OUTPUT_FOLDER = 'out'
 FINAL_MODEL = 'final_model'

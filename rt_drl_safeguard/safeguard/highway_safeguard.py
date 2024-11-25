@@ -1,153 +1,229 @@
-import math
-from typing import Union, Tuple, TypeVar, TYPE_CHECKING
+from functools import partial
+from typing import Tuple, TypeVar
 
-import numpy as np
 from highway_env import utils
-from highway_env.vehicle.controller import ControlledVehicle
+from numpy import ndarray
 
-SAFE_TTC_FASTER = 2.0
-SAFE_TTC_IDLE = 1.0
-SAFE_TTC_URGENT = 0.5
+from rt_drl_safeguard.safeguard.action_conversion import *
 
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
-
-class AbstractSafeguard(object):
-    def __init__(self,
-                 environment: RTEnv,
-                 safe_ttc_faster: float = SAFE_TTC_FASTER,
-                 safe_ttc_idle: float = SAFE_TTC_IDLE,
-                 safe_ttc_urgent: float = SAFE_TTC_URGENT):
-        self.env = environment
-        self.safe_ttc_faser = safe_ttc_faster
-        self.safe_ttc_idle = safe_ttc_idle
-        self.safe_ttc_urgent = safe_ttc_urgent
-        self.clock = 0.
-        self.location = 0
-        self.assurance_flag = "normal"
-
-    def assure(self, time: float, action: Action) -> Tuple[float, Action, str]:
-        raise NotImplementedError
-
-    def update(self):
-        raise NotImplementedError
+DEFAULT_DELAY_TORRENCE = 0.5
+DEFAULT_HORIZON = 10
+DEFAULT_TIME_QUANTIZATION = 1
 
 
-class HighwayAgentSafeguard(AbstractSafeguard):
+class HighwayAgentSafeguard:
     def __init__(self,
                  env: RTEnv,
-                 overhead: float = 0.01,
-                 time_quantization: float = 0.5,
-                 horizon: float = 5.0):
-        super().__init__(env)
-        # overhead (running time) for the safeguard
-        self.overhead = overhead
-        # TODO: add more speed indices for speed change
-        self.num_speed_indices = 1
-        self.num_lanes = len(self.env.unwrapped.road.network.all_side_lanes(env.unwrapped.vehicle.lane_index))
-        self.grid = np.zeros(
-            (self.num_speed_indices, self.num_lanes, int(horizon / time_quantization))
-        )
-        self.time_quantization = time_quantization
-        self.horizon = horizon
-        self.lane_index = env.unwrapped.vehicle.lane_index
-        self.ttc = np.inf
+                 delay_torrence: float = DEFAULT_DELAY_TORRENCE):
+        self.env = env
+        self.secondary_controller = SecondaryController(env)
+        self.t0 = delay_torrence
 
     def assure(self, a: Action, t: float) -> Tuple[Action, float, str]:
-        if self.location == 0:
-            if t >= self.safe_ttc_urgent:
-                return np.array([0., 0.]), self.safe_ttc_urgent, "urgent"
-            else:
-                return a, t, "normal"
-        elif self.location == 1:
-            if t >= self.safe_ttc_urgent:
-                return np.array([-0.5, 0.]), self.safe_ttc_urgent, "urgent"
-            else:
-                if a[0] > -0.2:
-                    a[0] = -0.2
-                    return a, t, "modified"
-                else:
-                    return a, t, "normal"
-        elif self.location == 2:
-            if t >= self.safe_ttc_urgent:
-                return np.array([0., 0.]), self.safe_ttc_urgent, "urgent"
-            else:
-                if a[0] > 0:
-                    a[0] = 0
-                    return a, t, "modified"
-                else:
-                    return a, t, "normal"
-
-    def update(self):
-        self._compute_ttc()
-        if self.ttc < self.safe_ttc_idle:
-            # non-safe location to keep speed
-            self.location = 1
-        elif self.safe_ttc_idle <= self.ttc < self.safe_ttc_faser:
-            # non-safe location to accelerate
-            self.location = 2
+        if t <= self.t0:
+            return a, t, "normal"
         else:
-            # safe for all actions
-            self.location = 0
+            a = self.secondary_controller.act()
+            return a, self.t0, "urgent"
 
-    def _compute_ttc(self):
-        self._compute_ttc_grid()
-        # speed_index = self.env.unwrapped.vehicle.speed_index
-        speed_index = 0
-        lane_index = self.lane_index[2]
-        # ttc the first index of collision prob 1
-        ttc1_ary = np.where(self.grid[speed_index][lane_index] == 1.0)[0]
-        if ttc1_ary.size > 0:
-            self.ttc = ttc1_ary[0] * self.time_quantization
+
+class SecondaryController:
+    """A secondary controller used by the safeguard"""
+
+    def __init__(
+            self,
+            env: RTEnv):
+        self.env = env.unwrapped
+        # self.target_lane_index = self.env.controlled_vehicle.lane_index
+        self.horizon = DEFAULT_HORIZON
+        self.time_quantization = DEFAULT_TIME_QUANTIZATION
+        self.speed_actions = META_SPEED_ACTIONS
+        self.lane_actions = META_LANE_ACTIONS
+        self.actions = META_LANE_ACTIONS + META_LANE_ACTIONS
+        self.action_converter = ActionConvertor(self.env.road.copy(), self.env.vehicle.position.copy())
+
+    def act(self) -> Dict[str, float]:
+        state, transition, reward, terminal = self._mdp()
+        gamma = 0.8
+        num_iterations = 10
+        value = self._value_iteration(transition, reward, terminal, gamma, num_iterations)
+        a_opt = self._get_best_action(state, value, transition)
+        return self._convert_to_lower_level_action(self.actions[a_opt])
+
+    def _mdp(self):
+
+        n_actions = len(self.actions)
+        collision_reward = self.env.config["collision_reward"]
+        right_lane_reward = self.env.config["right_lane_reward"]
+        high_speed_reward = self.env.config["high_speed_reward"]
+        lane_change_reward = self.env.config["lane_change_reward"]
+
+        # Compute TTC grid
+        grid = self._ttc_grid()
+
+        # Compute current state
+        grid_state = (self.env.vehicle.speed_index, self.env.vehicle.lane_index[2], 0)
+        state = np.ravel_multi_index(grid_state, grid.shape)
+
+        # Compute transition function
+        transition_model_with_grid = partial(self._transition_model, grid=grid)
+        transition = np.fromfunction(
+            transition_model_with_grid, grid.shape + (n_actions,), dtype=int
+        )
+
+        # Compute reward function
+        v, l, t = grid.shape
+        lanes = np.arange(l) / max(l - 1, 1)
+        speeds = np.arange(v) / max(v - 1, 1)
+
+        state_reward = (
+                + collision_reward * grid
+                + right_lane_reward
+                * np.tile(lanes[np.newaxis, :, np.newaxis], (v, 1, t))
+                + high_speed_reward
+                * np.tile(speeds[:, np.newaxis, np.newaxis], (1, l, t))
+        )
+
+        state_reward = np.ravel(state_reward)
+        action_reward = [
+            lane_change_reward,
+            0,
+            lane_change_reward,
+            0,
+            0,
+        ]
+        reward = np.fromfunction(
+            np.vectorize(lambda s, a: state_reward[s] + action_reward[a]),
+            (np.size(state_reward), np.size(action_reward)),
+            dtype=int,
+        )
+
+        # Compute terminal states
+        collision = grid == 1
+        end_of_horizon = np.fromfunction(
+            lambda h, i, j: j == grid.shape[2] - 1, grid.shape, dtype=int
+        )
+        terminal = np.ravel(collision | end_of_horizon)
+        return state, transition, reward, terminal
+
+    def _transition_model(self, s: int, a: int, grid: np.ndarray) -> ndarray:
+        h, i, j = np.unravel_index(s, grid.shape)
+        """
+        :param h: speed index
+        :param i: lane index
+        :param j: time index
+        :param a: action index
+        :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
+        """
+        left = a == 0
+        right = a == 2
+        faster = (a == 3) & (j == 0)
+        slower = (a == 4) & (j == 0)
+        if left:
+            next_s = self._clip_position(h, i - 1, j + 1, grid)
+        elif right:
+            next_s = self._clip_position(h, i + 1, j + 1, grid)
+        elif faster:
+            next_s = self._clip_position(h + 1, i, j + 1, grid)
+        elif slower:
+            next_s = self._clip_position(h - 1, i, j + 1, grid)
         else:
-            self.ttc = np.inf
+            # Idle action (1) as default transition
+            next_s = self._clip_position(h, i, j + 1, grid)
 
-    def _compute_ttc_grid(self):
-        """
-        Compute the grid of predicted time-to-collision to each vehicle within the lane
-        """
-        # vehicle = vehicle or env.vehicle
-        # road_lanes = env.road.network.all_side_lanes(env.vehicle.lane_index)
-        # grid = np.zeros(
-        #    (vehicle.target_speeds.size, len(road_lanes), int(horizon / time_quantization))
-        # )
-        ego_vehicle = self.env.unwrapped.vehicle
-        for speed_index in range(self.grid.shape[0]):
-            ego_speed = ego_vehicle.speed
-            for other in self.env.unwrapped.road.vehicles:
-                if (other is ego_vehicle) or (ego_speed == other.speed):
+        return next_s
+
+    def _ttc_grid(self):
+        vehicle = self.env.vehicle
+        ego_speed = vehicle.speed
+        target_speeds = np.clip([ego_speed - DEFAULT_DELTA_SPEED,
+                                 ego_speed,
+                                 ego_speed + DEFAULT_DELTA_SPEED],
+                                DEFAULT_MIN_SPEED,
+                                DEFAULT_MAX_SPEED)
+        road_lanes = self.env.road.network.all_side_lanes(self.env.vehicle.lane_index)
+        horizon = self.horizon
+        time_quantization = self.time_quantization
+        grid = np.zeros(
+            (len(target_speeds), len(road_lanes), int(horizon / time_quantization))
+        )
+        for speed_index in range(grid.shape[0]):
+            ego_speed = target_speeds[speed_index]
+            for other in self.env.road.vehicles:
+                if (other is vehicle) or (ego_speed == other.speed):
                     continue
-                margin = other.LENGTH / 2 + ego_vehicle.LENGTH / 2
+                margin = other.LENGTH / 2 + vehicle.LENGTH / 2
                 collision_points = [(0, 1), (-margin, 0.5), (margin, 0.5)]
                 for m, cost in collision_points:
-                    distance = ego_vehicle.lane_distance_to(other) + m
+                    distance = vehicle.lane_distance_to(other) + m
                     other_projected_speed = other.speed * np.dot(
-                        other.direction, ego_vehicle.direction
+                        other.direction, vehicle.direction
                     )
                     time_to_collision = distance / utils.not_zero(
                         ego_speed - other_projected_speed
                     )
                     if time_to_collision < 0:
                         continue
-                    if self.env.unwrapped.road.network.is_connected_road(
-                            ego_vehicle.lane_index, other.lane_index, depth=3#, route=ego_vehicle.route
+                    if self.env.road.network.is_connected_road(
+                            vehicle.lane_index, other.lane_index, route=vehicle.route, depth=3
                     ):
                         # Same road, or connected road with same number of lanes
-                        if len(self.env.unwrapped.road.network.all_side_lanes(other.lane_index)) == len(
-                                self.env.unwrapped.road.network.all_side_lanes(ego_vehicle.lane_index)
+                        if len(self.env.road.network.all_side_lanes(other.lane_index)) == len(
+                                self.env.road.network.all_side_lanes(vehicle.lane_index)
                         ):
                             lane = [other.lane_index[2]]
                         # Different road of different number of lanes: uncertainty on future lane, use all
                         else:
-                            lane = range(self.grid.shape[1])
+                            lane = range(grid.shape[1])
                         # Quantize time-to-collision to both upper and lower values
                         for time in [
-                            int(time_to_collision / self.time_quantization),
-                            int(np.ceil(time_to_collision / self.time_quantization)),
+                            int(time_to_collision / time_quantization),
+                            int(np.ceil(time_to_collision / time_quantization)),
                         ]:
-                            if 0 <= time < self.grid.shape[2]:
+                            if 0 <= time < grid.shape[2]:
                                 # TODO: check lane overflow (e.g. vehicle with higher lane id than current road capacity)
-                                self.grid[speed_index, lane, time] = np.maximum(
-                                    self.grid[speed_index, lane, time], cost
+                                grid[speed_index, lane, time] = np.maximum(
+                                    grid[speed_index, lane, time], cost
                                 )
+        return grid
+
+    def _clip_position(self, h: int, i: int, j: int, grid: np.ndarray) -> np.ndarray:
+        """
+        Clip a position in the TTC grid, so that it stays within bounds.
+
+        :param h: speed index
+        :param i: lane index
+        :param j: time index
+        :param grid: the ttc grid
+        :return: The raveled index of the clipped position
+        """
+        h = np.clip(h, 0, grid.shape[0] - 1)
+        i = np.clip(i, 0, grid.shape[1] - 1)
+        j = np.clip(j, 0, grid.shape[2] - 1)
+        indexes = np.ravel_multi_index((h, i, j), grid.shape)
+        return indexes
+
+    def _value_iteration(self, transition, reward, terminal, gamma, num_iterations):
+        value = np.zeros(transition.shape[0])
+        for _ in range(num_iterations):
+            value = self._bellman_update(value, transition, reward, terminal, gamma)
+        return value
+
+    def _bellman_update(self, value, transition, reward, terminal, gamma):
+        q_value = np.fromfunction(lambda s, a: value[transition[s, a]], transition.shape)
+        q_value[terminal] = 0
+        q_value = reward + gamma * q_value
+        return q_value.max(axis=-1)
+
+    def _get_best_action(self, state, value, transition):
+        n_actions = len(self.actions)
+        return np.argmax([value[transition[state, a]] for a in range(n_actions)])
+
+    def _convert_to_lower_level_action(self, action):
+        position = self.env.vehicle.position
+        heading = self.env.vehicle.heading
+        speed = self.env.vehicle.speed
+        return self.action_converter.convert(action, position, heading, speed)

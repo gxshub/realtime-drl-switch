@@ -7,10 +7,11 @@ Options:
   -h --help              Show this screen.
   --episodes <count>     Number of episodes [default: 4].
   --processes <count>    Number of running processes [default: 1].
-  --rtc <time>           Random seed for rea-ltime computing. If 0, not real-time. [default: 0]
+  --rtc-seed <time>      Random seed for real-time computing. If 0, not real-time. [default: 0]
+  --random-delay         Randomised delay
+  --safeguard            Whether the system is safeguarded or not.
   --no-display           Disable environment, agent, and rewards rendering.
-  --safeguarded         Whether the system is safeguarded or not.
-  --test              Do not save model or log in the test mode.
+  --test                 Do not save model or log in the test mode.
 """
 
 import datetime
@@ -22,12 +23,13 @@ import numpy as np
 from docopt import docopt
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
+from sympy.core.random import random
 from tqdm import tqdm
 
 from rt_drl_safeguard.safeguard.highway_safeguard import HighwayAgentSafeguard
 from rt_drl_safeguard.utils.factory import load_agent_class, load_environment
-from rt_drl_safeguard.utils.randomization import exp_delay
 from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
+from rt_drl_safeguard.utils.randomization import exp_delay
 
 Agent = TypeVar("Agent")
 OUTPUT_FOLDER = "infer_results"
@@ -39,10 +41,11 @@ def main():
     agent_config_file = opts['<agent>']
     model_file = opts['<checkpoint>']
     n_episodes = int(opts['--episodes'])
-    rtc_seed = float(opts['--rtc'])
+    rtc_seed = float(opts['--rtc-seed'])
     if rtc_seed < 0:
         raise ValueError("rtc seed must be a non-negative value")
-    safeguarded = opts['--safeguarded']
+    random_delay = opts['--random-delay']
+    safeguard = opts['--safeguard']
     n_proc = int(opts['--processes'])
     test_mode = opts['--test']
 
@@ -64,10 +67,12 @@ def main():
     if n_proc == 1:
         env, _ = load_environment(env_config_file, training=False, n_envs=n_proc)
         env = RealtimeHighway(env)
-        avg_epi_rew, avg_epi_len, crash_rate = infer(env, agent, n_episodes, rtc_seed, safeguarded)
+        avg_epi_rew, avg_epi_len, crash_rate = infer(env, agent, n_episodes, rtc_seed,
+                                                     random_delay=random_delay, safeguard=safeguard)
     else:
         env, _ = load_environment(env_config_file, training=False, n_envs=n_proc, realtime=True)
-        avg_epi_rew, avg_epi_len, crash_rate = infer_vec(env, agent, n_episodes, rtc_seed, safeguarded)
+        avg_epi_rew, avg_epi_len, crash_rate = infer_vec(env, agent, n_episodes, rtc_seed,
+                                                         random_delay=random_delay, safeguard=safeguard)
 
     logger.log("----------------------\nNumber of episodes: {}".format(n_episodes),
                "\nAverage episode accumulated reward: {}".format(avg_epi_rew),
@@ -79,7 +84,8 @@ def infer_vec(env,
               agent: "Agent",
               n_episodes: int,
               rtc_seed: float = 0,
-              with_safeguard: bool = False,
+              random_delay: bool = False,
+              safeguard: bool = False,
               deterministic: bool = True,
               render: bool = False,
               callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
@@ -104,7 +110,7 @@ def infer_vec(env,
     :param n_episodes: Number of episodes
     :param rtc_seed: randomization seed for real-time computing
     :param deterministic: Whether to use deterministic or stochastic actions
-    :param with_safeguard
+    :param safeguard
     :param render: Whether to render the environment or not
     :param callback: callback function to do additional checks,
         called after each step. Gets locals() and globals() passed as parameters.
@@ -150,6 +156,7 @@ def infer_vec(env,
 
     pbar = tqdm(total=n_episodes)
     with_delay = True if rtc_seed > 0 else False
+    sgs = [HighwayAgentSafeguard(env) for _ in range(n_envs)]
     while (episode_counts < episode_count_targets).any():
         # eval_logger.log("Episode counts: {}".format(episode_counts))
         actions, states = agent.predict(
@@ -160,12 +167,17 @@ def infer_vec(env,
         )
 
         if with_delay:
-            # sample n_envs delays
-            delays = exp_delay(rtc_seed, n_envs)
+            if random_delay:
+                # sample n_envs delays
+                delays = exp_delay(rtc_seed, n_envs)
+            else:
+                delays = np.array([rtc_seed] * n_envs)
             for i in range(n_envs):
+                if safeguard:
+                    actions[i], delays[i], _ = sgs[i].assure(actions[i], delays[i])
                 env.env_method("set_delay", delays[i], indices=[i])
                 # print("delay in env {}: {}".format(i, env.env_method("get_wrapper_attr", "delay", indices=[i])))
-                
+
         new_observations, rewards, dones, infos = env.step(actions)
         current_rewards += rewards
         current_lengths += 1
@@ -216,7 +228,8 @@ def infer(env,
           agent: "Agent",
           n_episodes: int,
           rtc_seed: float = 0,
-          with_safeguard: bool = False):
+          random_delay: bool = False,
+          safeguard: bool = False):
     sg = HighwayAgentSafeguard(env)
     episode_rewards = []
     episode_lengths = []
@@ -231,11 +244,15 @@ def infer(env,
         delay = 0
         while not (done or truncated):
             action, _states = agent.predict(obs, deterministic=True)
+            # print("action: ", action)
             if with_delay:
                 # randomize delay
-                delay = exp_delay(rtc_seed)
-            if with_safeguard:
-                action, delay, _ = sg.assure(action, delay)
+                if random_delay:
+                    delay = exp_delay(rtc_seed)
+                else:
+                    delay = rtc_seed
+                if safeguard:
+                    action, delay, _ = sg.assure(action, delay)
             env.delay = delay
             obs, reward, done, truncated, info = env.step(action)
             sg.update()
