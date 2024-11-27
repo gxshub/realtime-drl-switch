@@ -174,7 +174,8 @@ def infer_vec(env,
                 delays = np.array([rtc_seed] * n_envs)
             for i in range(n_envs):
                 if safeguard:
-                    actions[i], delays[i], _ = sgs[i].assure(actions[i], delays[i])
+                    actions[i], delays[i], info = sgs[i].assure(actions[i], delays[i])
+                    print(info)
                 env.env_method("set_delay", delays[i], indices=[i])
                 # print("delay in env {}: {}".format(i, env.env_method("get_wrapper_attr", "delay", indices=[i])))
 
@@ -240,7 +241,7 @@ def infer(env,
         timestep = 0
         done = truncated = False
         obs, info = env.reset()
-        sg.update()
+        # sg.update()
         delay = 0
         while not (done or truncated):
             action, _states = agent.predict(obs, deterministic=True)
@@ -255,7 +256,7 @@ def infer(env,
                     action, delay, _ = sg.assure(action, delay)
             env.delay = delay
             obs, reward, done, truncated, info = env.step(action)
-            sg.update()
+            # sg.update()
             reward_acc += reward
             timestep += 1
         episode_rewards.append(reward_acc)

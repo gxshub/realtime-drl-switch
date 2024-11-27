@@ -1,15 +1,14 @@
 from functools import partial
-from typing import Tuple, TypeVar
+from typing import TypeVar
 
 from highway_env import utils
-from numpy import ndarray
 
 from rt_drl_safeguard.safeguard.action_conversion import *
 
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
-DEFAULT_DELAY_TORRENCE = 0.5
+DEFAULT_DELAY_TORRENCE = 0.25
 DEFAULT_HORIZON = 10
 DEFAULT_TIME_QUANTIZATION = 1
 
@@ -26,7 +25,7 @@ class HighwayAgentSafeguard:
         if t <= self.t0:
             return a, t, "normal"
         else:
-            a = self.secondary_controller.act()
+            a = self.secondary_controller.control()
             return a, self.t0, "urgent"
 
 
@@ -42,10 +41,11 @@ class SecondaryController:
         self.time_quantization = DEFAULT_TIME_QUANTIZATION
         self.speed_actions = META_SPEED_ACTIONS
         self.lane_actions = META_LANE_ACTIONS
-        self.actions = META_LANE_ACTIONS + META_LANE_ACTIONS
-        self.action_converter = ActionConvertor(self.env.road.copy(), self.env.vehicle.position.copy())
+        self.current_speed_index = self.speed_actions.index("IDLE")
+        self.actions = self.speed_actions + self.lane_actions
+        self.action_converter = ActionConvertor(env)
 
-    def act(self) -> Dict[str, float]:
+    def control(self) -> np.ndarray:
         state, transition, reward, terminal = self._mdp()
         gamma = 0.8
         num_iterations = 10
@@ -54,7 +54,6 @@ class SecondaryController:
         return self._convert_to_lower_level_action(self.actions[a_opt])
 
     def _mdp(self):
-
         n_actions = len(self.actions)
         collision_reward = self.env.config["collision_reward"]
         right_lane_reward = self.env.config["right_lane_reward"]
@@ -65,13 +64,13 @@ class SecondaryController:
         grid = self._ttc_grid()
 
         # Compute current state
-        grid_state = (self.env.vehicle.speed_index, self.env.vehicle.lane_index[2], 0)
+        grid_state = (self.current_speed_index, self.env.vehicle.lane_index[2], 0)
         state = np.ravel_multi_index(grid_state, grid.shape)
 
         # Compute transition function
         transition_model_with_grid = partial(self._transition_model, grid=grid)
         transition = np.fromfunction(
-            transition_model_with_grid, grid.shape + (n_actions,), dtype=int
+            transition_model_with_grid, (grid.size, n_actions), dtype=int
         )
 
         # Compute reward function
@@ -109,7 +108,7 @@ class SecondaryController:
         terminal = np.ravel(collision | end_of_horizon)
         return state, transition, reward, terminal
 
-    def _transition_model(self, s: int, a: int, grid: np.ndarray) -> ndarray:
+    def _transition_model(self, s: int, a: int, grid: np.ndarray) -> int:
         h, i, j = np.unravel_index(s, grid.shape)
         """
         :param h: speed index
@@ -118,10 +117,19 @@ class SecondaryController:
         :param a: action index
         :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
         """
+        # Idle action (1) as default transition
+        next_s = self._clip_position(h, i, j + 1, grid)
         left = a == 0
         right = a == 2
         faster = (a == 3) & (j == 0)
         slower = (a == 4) & (j == 0)
+
+        next_s[left] = self._clip_position(h[left], i[left] - 1, j[left] + 1, grid)
+        next_s[right] = self._clip_position(h[right], i[right] + 1, j[right] + 1, grid)
+        next_s[faster] = self._clip_position(h[faster] + 1, i[faster], j[faster] + 1, grid)
+        next_s[slower] = self._clip_position(h[slower] - 1, i[slower], j[slower] + 1, grid)
+
+        """
         if left:
             next_s = self._clip_position(h, i - 1, j + 1, grid)
         elif right:
@@ -133,7 +141,7 @@ class SecondaryController:
         else:
             # Idle action (1) as default transition
             next_s = self._clip_position(h, i, j + 1, grid)
-
+        """
         return next_s
 
     def _ttc_grid(self):
@@ -168,7 +176,7 @@ class SecondaryController:
                     if time_to_collision < 0:
                         continue
                     if self.env.road.network.is_connected_road(
-                            vehicle.lane_index, other.lane_index, route=vehicle.route, depth=3
+                            vehicle.lane_index, other.lane_index, route=None, depth=3
                     ):
                         # Same road, or connected road with same number of lanes
                         if len(self.env.road.network.all_side_lanes(other.lane_index)) == len(
@@ -190,7 +198,7 @@ class SecondaryController:
                                 )
         return grid
 
-    def _clip_position(self, h: int, i: int, j: int, grid: np.ndarray) -> np.ndarray:
+    def _clip_position(self, h: int, i: int, j: int, grid: np.ndarray) -> int:
         """
         Clip a position in the TTC grid, so that it stays within bounds.
 
@@ -200,6 +208,7 @@ class SecondaryController:
         :param grid: the ttc grid
         :return: The raveled index of the clipped position
         """
+
         h = np.clip(h, 0, grid.shape[0] - 1)
         i = np.clip(i, 0, grid.shape[1] - 1)
         j = np.clip(j, 0, grid.shape[2] - 1)
@@ -213,7 +222,11 @@ class SecondaryController:
         return value
 
     def _bellman_update(self, value, transition, reward, terminal, gamma):
-        q_value = np.fromfunction(lambda s, a: value[transition[s, a]], transition.shape)
+        q_value = np.zeros(transition.shape)
+        for s in range(transition.shape[0]):
+            for a in range(transition.shape[1]):
+                q_value[s, a] = value[transition[s, a]]
+        # q_value = np.fromfunction(lambda s, a: value[transition[s,a]], transition.shape, dtype=int)
         q_value[terminal] = 0
         q_value = reward + gamma * q_value
         return q_value.max(axis=-1)

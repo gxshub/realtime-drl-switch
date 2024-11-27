@@ -15,13 +15,19 @@ out/highway_env_continuous_actions/stable_baselines3.ppo.ppo/2024-10-08_23_18_16
 --test
 ```
 
-
 For real-time inference:
 ```shell
 python inference.py \
 configs/HighwayEnv/env_continuous_actions.json \
 configs/HighwayEnv/agents/sb3/ppo.json \
 out/highway_env_continuous_actions/stable_baselines3.ppo.ppo/2024-10-08_23_18_16/best_model.zip \
+--test
+```
+
+For controller-only evaluation:
+```shell
+python evaluation_co.py \
+configs/HighwayEnv/env_continuous_actions.json \
 --test
 ```
 
