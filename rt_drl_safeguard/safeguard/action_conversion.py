@@ -4,11 +4,7 @@ from typing import List, Union, Tuple
 import numpy as np
 from highway_env.vehicle.controller import MDPVehicle
 
-DEFAULT_MAX_SPEED = 40.0  # m/s
-DEFAULT_MIN_SPEED = 0.0  # m/s
-DEFAULT_DELTA_SPEED = 5.0  # m/s
-META_SPEED_ACTIONS = ["FASTER", "IDLE", "SLOWER"]
-META_LANE_ACTIONS = ["LEFT", "RIGHT"]
+from rt_drl_safeguard.safeguard.meta_control_data import MAX_SPEED, MIN_SPEED, SPEED_LEVELS, LANE_CHANGES, DELTA_SPEED
 
 
 class ActionConvertor(MDPVehicle):
@@ -18,44 +14,32 @@ class ActionConvertor(MDPVehicle):
             env
     ) -> None:
         road = copy.deepcopy(env.road)
-        position = copy.deepcopy(env.vehicle.position)
+        position = copy.deepcopy(env.unwrapped.vehicle.position)
         heading = 0.0
         speed = 0.0
         super().__init__(
             road, position, heading, speed
         )
-        self.MAX_SPEED = DEFAULT_MAX_SPEED
-        self.MIN_SPEED = DEFAULT_MIN_SPEED
-        self.ACCELERATION_RANGE = env.action_type.acceleration_range
-        self.STEERING_RANGE = env.action_type.steering_range
+        self.max_speed = MAX_SPEED
+        self.min_speed = MIN_SPEED
+        self.acceleration_range = env.unwrapped.action_type.acceleration_range
+        self.steering_range = env.unwrapped.action_type.steering_range
+        self.speed_change_range = np.linspace(-1, 1, SPEED_LEVELS) * DELTA_SPEED
+        assert len(self.speed_change_range) == SPEED_LEVELS
+        self.num_actions = SPEED_LEVELS + LANE_CHANGES
 
     def convert(self,
-                action: str,
+                action: int,
                 position: List[float],
                 heading: float,
                 speed: float) -> np.ndarray:
-        if action not in META_SPEED_ACTIONS + META_LANE_ACTIONS:
-            raise RuntimeError(" '{}' is not a supported meta action".format(action))
         self.set_position(position)
         self.set_heading(heading)
         self.set_speed(speed)
 
-        if action == "FASTER":
-            self.target_speed = min(self.MAX_SPEED, self.target_speed + DEFAULT_DELTA_SPEED)
-        elif action == "SLOWER":
-            self.target_speed = max(self.MIN_SPEED, self.target_speed - DEFAULT_DELTA_SPEED)
-        elif action == "RIGHT":
-            _from, _to, _id = self.target_lane_index
-            target_lane_index = (
-                _from,
-                _to,
-                np.clip(_id + 1, 0, len(self.road.network.graph[_from][_to]) - 1),
-            )
-            if self.road.network.get_lane(target_lane_index).is_reachable_from(
-                    self.position
-            ):
-                self.target_lane_index = target_lane_index
-        elif action == "LEFT":
+        if action not in range(self.num_actions):
+            raise RuntimeError("illegal action index ")
+        elif action == 0:
             _from, _to, _id = self.target_lane_index
             target_lane_index = (
                 _from,
@@ -66,19 +50,35 @@ class ActionConvertor(MDPVehicle):
                     self.position
             ):
                 self.target_lane_index = target_lane_index
+        elif action == 1:
+            _from, _to, _id = self.target_lane_index
+            target_lane_index = (
+                _from,
+                _to,
+                np.clip(_id + 1, 0, len(self.road.network.graph[_from][_to]) - 1),
+            )
+            if self.road.network.get_lane(target_lane_index).is_reachable_from(
+                    self.position
+            ):
+                self.target_lane_index = target_lane_index
+        elif action > 1:
+            # speed change action
+            _speed_action = action - 2
+            self.target_speed += self.speed + self.speed_change_range[_speed_action]
+            self.target_speed = np.clip(self.target_speed, self.min_speed, self.max_speed)
 
         converted_action = {
             "steering": self.steering_control(self.target_lane_index),
             "acceleration": self.speed_control(self.target_speed),
         }
         converted_action["steering"] = np.clip(
-            converted_action["steering"], self.STEERING_RANGE[0], self.STEERING_RANGE[1]
+            converted_action["steering"], self.steering_range[0], self.steering_range[1]
         )
         converted_action["acceleration"] = np.clip(
-            converted_action["acceleration"], self.ACCELERATION_RANGE[0], self.ACCELERATION_RANGE[1]
+            converted_action["acceleration"], self.acceleration_range[0], self.acceleration_range[1]
         )
-        ac = lmap(converted_action["acceleration"], self.ACCELERATION_RANGE, [-1, 1])
-        st = lmap(converted_action["steering"], self.STEERING_RANGE, [-1, 1])
+        ac = lmap(converted_action["acceleration"], self.acceleration_range, [-1, 1])
+        st = lmap(converted_action["steering"], self.steering_range, [-1, 1])
         return np.array([ac, st])
 
     def set_position(self, position):

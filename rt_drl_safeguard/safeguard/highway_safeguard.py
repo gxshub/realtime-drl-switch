@@ -1,19 +1,17 @@
-from functools import partial
-from typing import TypeVar
+from typing import TypeVar, Tuple
 
+import numpy as np
 from highway_env import utils
 
-from rt_drl_safeguard.safeguard.action_conversion import *
+from rt_drl_safeguard.safeguard.action_conversion import ActionConvertor
+from rt_drl_safeguard.safeguard.meta_control_data import *
 
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
-DEFAULT_DELAY_TORRENCE = 0.25
-DEFAULT_HORIZON = 10
-DEFAULT_TIME_QUANTIZATION = 1
-
 
 class HighwayAgentSafeguard:
+
     def __init__(self,
                  env: RTEnv,
                  delay_torrence: float = DEFAULT_DELAY_TORRENCE):
@@ -36,14 +34,14 @@ class SecondaryController:
             self,
             env: RTEnv):
         self.env = env.unwrapped
-        # self.target_lane_index = self.env.controlled_vehicle.lane_index
         self.horizon = DEFAULT_HORIZON
         self.time_quantization = DEFAULT_TIME_QUANTIZATION
-        self.speed_actions = META_SPEED_ACTIONS
-        self.lane_actions = META_LANE_ACTIONS
-        self.current_speed_index = self.speed_actions.index("IDLE")
-        self.actions = self.speed_actions + self.lane_actions
+        self.num_actions = SPEED_LEVELS + LANE_CHANGES
+        self.speed_levels = SPEED_LEVELS
+        self.delta_speed = DELTA_SPEED
+        self.idle_action = int((self.speed_levels  + 1) / 2)
         self.action_converter = ActionConvertor(env)
+        assert self.speed_levels % 2 == 1
 
     def control(self) -> np.ndarray:
         state, transition, reward, terminal = self._mdp()
@@ -51,10 +49,9 @@ class SecondaryController:
         num_iterations = 10
         value = self._value_iteration(transition, reward, terminal, gamma, num_iterations)
         a_opt = self._get_best_action(state, value, transition)
-        return self._convert_to_lower_level_action(self.actions[a_opt])
+        return self._convert_to_lower_level_action(a_opt)
 
     def _mdp(self):
-        n_actions = len(self.actions)
         collision_reward = self.env.config["collision_reward"]
         right_lane_reward = self.env.config["right_lane_reward"]
         high_speed_reward = self.env.config["high_speed_reward"]
@@ -64,14 +61,14 @@ class SecondaryController:
         grid = self._ttc_grid()
 
         # Compute current state
-        grid_state = (self.current_speed_index, self.env.vehicle.lane_index[2], 0)
+        grid_state = (self.idle_action - LANE_CHANGES, self.env.vehicle.lane_index[2], 0)
         state = np.ravel_multi_index(grid_state, grid.shape)
 
         # Compute transition function
-        transition_model_with_grid = partial(self._transition_model, grid=grid)
-        transition = np.fromfunction(
-            transition_model_with_grid, (grid.size, n_actions), dtype=int
-        )
+        transition = np.zeros((grid.size, self.num_actions), dtype=int)
+        for s in range(transition.shape[0]):
+            for a in range(transition.shape[1]):
+                transition[s, a] = self._transition_model(s, a, grid)
 
         # Compute reward function
         v, l, t = grid.shape
@@ -87,13 +84,8 @@ class SecondaryController:
         )
 
         state_reward = np.ravel(state_reward)
-        action_reward = [
-            lane_change_reward,
-            0,
-            lane_change_reward,
-            0,
-            0,
-        ]
+        action_reward = np.zeros(self.num_actions)
+        action_reward[:2] = lane_change_reward
         reward = np.fromfunction(
             np.vectorize(lambda s, a: state_reward[s] + action_reward[a]),
             (np.size(state_reward), np.size(action_reward)),
@@ -117,41 +109,28 @@ class SecondaryController:
         :param a: action index
         :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
         """
-        # Idle action (1) as default transition
-        next_s = self._clip_position(h, i, j + 1, grid)
         left = a == 0
-        right = a == 2
-        faster = (a == 3) & (j == 0)
-        slower = (a == 4) & (j == 0)
+        right = a == 1
+        speed_change = (a > 1) & (j == 0)
+        a0 = self.idle_action + 2
 
-        next_s[left] = self._clip_position(h[left], i[left] - 1, j[left] + 1, grid)
-        next_s[right] = self._clip_position(h[right], i[right] + 1, j[right] + 1, grid)
-        next_s[faster] = self._clip_position(h[faster] + 1, i[faster], j[faster] + 1, grid)
-        next_s[slower] = self._clip_position(h[slower] - 1, i[slower], j[slower] + 1, grid)
-
-        """
         if left:
             next_s = self._clip_position(h, i - 1, j + 1, grid)
         elif right:
             next_s = self._clip_position(h, i + 1, j + 1, grid)
-        elif faster:
-            next_s = self._clip_position(h + 1, i, j + 1, grid)
-        elif slower:
-            next_s = self._clip_position(h - 1, i, j + 1, grid)
+        elif speed_change:
+            next_s = self._clip_position(h + a - a0, i, j + 1, grid)
         else:
-            # Idle action (1) as default transition
             next_s = self._clip_position(h, i, j + 1, grid)
-        """
+
         return next_s
 
     def _ttc_grid(self):
         vehicle = self.env.vehicle
         ego_speed = vehicle.speed
-        target_speeds = np.clip([ego_speed - DEFAULT_DELTA_SPEED,
-                                 ego_speed,
-                                 ego_speed + DEFAULT_DELTA_SPEED],
-                                DEFAULT_MIN_SPEED,
-                                DEFAULT_MAX_SPEED)
+        target_speeds = np.zeros(self.speed_levels)
+        for h in range(self.speed_levels):
+            target_speeds[h] = ego_speed + (h - self.idle_action) * self.delta_speed
         road_lanes = self.env.road.network.all_side_lanes(self.env.vehicle.lane_index)
         horizon = self.horizon
         time_quantization = self.time_quantization
@@ -226,13 +205,12 @@ class SecondaryController:
         for s in range(transition.shape[0]):
             for a in range(transition.shape[1]):
                 q_value[s, a] = value[transition[s, a]]
-        # q_value = np.fromfunction(lambda s, a: value[transition[s,a]], transition.shape, dtype=int)
         q_value[terminal] = 0
         q_value = reward + gamma * q_value
         return q_value.max(axis=-1)
 
-    def _get_best_action(self, state, value, transition):
-        n_actions = len(self.actions)
+    def _get_best_action(self, state, value, transition) -> int:
+        n_actions = self.num_actions
         return np.argmax([value[transition[state, a]] for a in range(n_actions)])
 
     def _convert_to_lower_level_action(self, action):
