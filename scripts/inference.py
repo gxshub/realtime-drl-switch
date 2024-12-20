@@ -23,7 +23,6 @@ import numpy as np
 from docopt import docopt
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
-from sympy.core.random import random
 from tqdm import tqdm
 
 from rt_drl_safeguard.safeguard.highway_safeguard import HighwayAgentSafeguard
@@ -156,7 +155,7 @@ def infer_vec(env,
 
     pbar = tqdm(total=n_episodes)
     with_delay = True if rtc_seed > 0 else False
-    sgs = [HighwayAgentSafeguard(env) for _ in range(n_envs)]
+    #sgs = [HighwayAgentSafeguard(env) for _ in range(n_envs)]
     while (episode_counts < episode_count_targets).any():
         # eval_logger.log("Episode counts: {}".format(episode_counts))
         actions, states = agent.predict(
@@ -173,9 +172,9 @@ def infer_vec(env,
             else:
                 delays = np.array([rtc_seed] * n_envs)
             for i in range(n_envs):
-                if safeguard:
-                    actions[i], delays[i], info = sgs[i].assure(actions[i], delays[i])
-                    print(info)
+                #if safeguard:
+                #    actions[i], delays[i], info = sgs[i].assure(actions[i], delays[i])
+                #    print(info)
                 env.env_method("set_delay", delays[i], indices=[i])
                 # print("delay in env {}: {}".format(i, env.env_method("get_wrapper_attr", "delay", indices=[i])))
 
@@ -264,6 +263,7 @@ def infer(env,
         crashed = env.unwrapped.vehicle.crashed
         if crashed:
             n_crashes += 1
+        print("crashed: ", crashed)
     return np.mean(episode_rewards), np.mean(episode_lengths), n_crashes / n_episodes
 
 

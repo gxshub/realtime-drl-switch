@@ -72,6 +72,7 @@ def evaluate(env, controller, n_episodes):
         crashed = env.unwrapped.vehicle.crashed
         if crashed:
             n_crashes += 1
+        print("!!crashed: ", crashed)
     return np.mean(episode_rewards), np.mean(episode_lengths), n_crashes / n_episodes
 
 

@@ -36,7 +36,7 @@ class SecondaryController:
         self.env = env.unwrapped
         self.horizon = DEFAULT_HORIZON
         self.time_quantization = DEFAULT_TIME_QUANTIZATION
-        self.num_actions = SPEED_LEVELS + LANE_CHANGES
+        self.num_actions = SPEED_LEVELS
         self.speed_levels = SPEED_LEVELS
         self.delta_speed = DELTA_SPEED
         self.idle_action = int((self.speed_levels  + 1) / 2)
@@ -45,23 +45,26 @@ class SecondaryController:
 
     def control(self) -> np.ndarray:
         state, transition, reward, terminal = self._mdp()
-        gamma = 0.8
+        gamma = 0.95
         num_iterations = 10
         value = self._value_iteration(transition, reward, terminal, gamma, num_iterations)
         a_opt = self._get_best_action(state, value, transition)
+        #print("a_opt: ", a_opt)
+        #print("self._convert_to_lower_level_action(a_opt): ", self._convert_to_lower_level_action(a_opt))
         return self._convert_to_lower_level_action(a_opt)
 
     def _mdp(self):
-        collision_reward = self.env.config["collision_reward"]
-        right_lane_reward = self.env.config["right_lane_reward"]
-        high_speed_reward = self.env.config["high_speed_reward"]
-        lane_change_reward = self.env.config["lane_change_reward"]
+        collision_reward = -1 # self.env.config["collision_reward"]
+        right_lane_reward = 0 #self.env.config["right_lane_reward"]
+        high_speed_reward = 0 # self.env.config["high_speed_reward"]
+        lane_change_reward = 0 # self.env.config["lane_change_reward"]
 
         # Compute TTC grid
         grid = self._ttc_grid()
 
         # Compute current state
-        grid_state = (self.idle_action - LANE_CHANGES, self.env.vehicle.lane_index[2], 0)
+        grid_state = (self.idle_action, self.env.vehicle.lane_index[2], 0)
+        # print("grid_state: ", grid_state)
         state = np.ravel_multi_index(grid_state, grid.shape)
 
         # Compute transition function
@@ -109,10 +112,10 @@ class SecondaryController:
         :param a: action index
         :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
         """
-        left = a == 0
-        right = a == 1
-        speed_change = (a > 1) & (j == 0)
-        a0 = self.idle_action + 2
+        left = False # a == 0
+        right = False # a == 1
+        speed_change = j== 0 #(a > 1) & (j == 0)
+        a0 = self.idle_action # +2
 
         if left:
             next_s = self._clip_position(h, i - 1, j + 1, grid)
@@ -175,6 +178,23 @@ class SecondaryController:
                                 grid[speed_index, lane, time] = np.maximum(
                                     grid[speed_index, lane, time], cost
                                 )
+        #indices = {1: self.env.vehicle.lane_index}
+        #ix = [indices.get(dim, slice(None)) for dim in range(grid.ndim)]
+        # print("tcc grid at current range", grid[ix])
+        status = []
+        for other in self.env.road.vehicles:
+            if other is not vehicle and other.lane_index == vehicle.lane_index:
+                margin = other.LENGTH / 2 + vehicle.LENGTH / 2
+                on_lane_distance = vehicle.lane_distance_to(other) - margin
+                relative_speed = vehicle.speed - other.speed
+                #relative_speed = vehicle.speed - other.speed * np.dot(
+                #    other.direction, vehicle.direction
+                #)
+                ttc = on_lane_distance / relative_speed
+                status.append(({'on-lane distance': on_lane_distance}, {'relative speed': relative_speed}, {'ttc': ttc}))
+
+        # distances.sort()
+        print("!!!ttc status: ", status)
         return grid
 
     def _clip_position(self, h: int, i: int, j: int, grid: np.ndarray) -> int:
@@ -211,7 +231,14 @@ class SecondaryController:
 
     def _get_best_action(self, state, value, transition) -> int:
         n_actions = self.num_actions
-        return np.argmax([value[transition[state, a]] for a in range(n_actions)])
+        v = -np.inf
+        a_out = self.num_actions
+        for a in reversed(range(self.num_actions)):
+            if v < value[transition[state, a]]:
+                v = value[transition[state, a]]
+                a_out = a
+        # print("q value: ", [value[transition[state, a]] for a in range(self.num_actions)])
+        return a_out # np.argmax([value[transition[state, a]] for a in range(self.num_actions)])
 
     def _convert_to_lower_level_action(self, action):
         position = self.env.vehicle.position
