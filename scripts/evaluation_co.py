@@ -18,7 +18,7 @@ from docopt import docopt
 from stable_baselines3.common.logger import configure
 from tqdm import tqdm
 
-from rt_drl_safeguard.safeguard.highway_safeguard import SecondaryController
+from rt_drl_safeguard.safeguard.highway_safeguard import PlanningBasedController, TtcBasedController
 from rt_drl_safeguard.utils.factory import load_environment
 
 OUTPUT_FOLDER = "contr_eval_results"
@@ -31,7 +31,8 @@ def main():
     n_episodes = int(opts['--episodes'])
 
     env, _env_name = load_environment(env_config_file, n_envs=1)
-    controller = SecondaryController(env)
+    # controller = PlanningBasedController(env)
+    controller = TtcBasedController(env)
 
     version = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     test_result_folder = Path(__file__).parent / _env_name / OUTPUT_FOLDER / version

@@ -1,3 +1,4 @@
+from operator import index
 from typing import TypeVar, Tuple
 
 import numpy as np
@@ -9,6 +10,9 @@ from rt_drl_safeguard.safeguard.meta_control_data import *
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
+DEFAULT_DELAY_TORRENCE = 0.5 # s
+ACC_TIME_THD = 5.0 # s
+SW_TIME_THD = 5.0 #s
 
 class HighwayAgentSafeguard:
 
@@ -16,18 +20,108 @@ class HighwayAgentSafeguard:
                  env: RTEnv,
                  delay_torrence: float = DEFAULT_DELAY_TORRENCE):
         self.env = env
-        self.secondary_controller = SecondaryController(env)
-        self.t0 = delay_torrence
+        # self.secondary_controller = PlanningBasedController(env)
+        self.secondary_controller = TtcBasedController(env)
+        self.delay_torrence = delay_torrence
+        self.secondary_controller.delay = self.delay_torrence
 
     def assure(self, a: Action, t: float) -> Tuple[Action, float, str]:
-        if t <= self.t0:
+        if t <= self.delay_torrence:
             return a, t, "normal"
         else:
             a = self.secondary_controller.control()
-            return a, self.t0, "urgent"
+            return a, self.delay_torrence, "urgent"
 
 
-class SecondaryController:
+class TtcBasedController:
+    """A controller for safeguard directly based on ttc"""
+
+    def __init__(
+            self,
+            env: RTEnv):
+        self.env = env.unwrapped
+        self.horizon = DEFAULT_HORIZON
+        self.time_quantization = DEFAULT_TIME_QUANTIZATION
+        self.num_actions = SPEED_LEVELS
+        self.speed_levels = SPEED_LEVELS
+        self.delta_speed = DELTA_SPEED
+        self.idle_action = int((self.speed_levels  + 1) / 2)
+        self.converter = ActionConvertor(env)
+        assert self.speed_levels % 2 == 1
+        self.delay = 0
+
+    def compute_ttc(self, target_speed, target_lane_index):
+        ego_vehicle = self.env.vehicle
+        ego_speed = target_speed
+        ttc = np.inf
+        for other in self.env.road.vehicles:
+            if other is not ego_vehicle and other.lane_index == target_lane_index:
+                margin = other.LENGTH / 2 + ego_vehicle.LENGTH / 2
+                if ego_vehicle.lane_distance_to(other) > 0:
+                    on_lane_distance_x = ego_vehicle.lane_distance_to(other) - margin
+                else:
+                    on_lane_distance_x = ego_vehicle.lane_distance_to(other) + margin
+                # relative_speed_x = ego_speed - other.speed
+                relative_speed_x = ego_speed - other.speed * np.dot(
+                    other.direction, ego_vehicle.direction
+                )
+                ttc_x = on_lane_distance_x / relative_speed_x
+                if 0 < ttc_x < ttc:
+                    ttc = ttc_x
+        return  ttc
+
+    def control(self, acc_time_threshold = ACC_TIME_THD) -> np.ndarray:
+        acc_time_threshold += DEFAULT_DELAY_TORRENCE
+        ego_lane_index = self.env.vehicle.lane_index
+        # acceleration
+        target_speed = self.env.vehicle.speed + DELTA_SPEED
+        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+            return self._low_level_control(target_speed, ego_lane_index)
+        # keep speed
+        target_speed = self.env.vehicle.speed
+        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+            return self._low_level_control(target_speed, ego_lane_index)
+        # deceleration
+        target_speed = self.env.vehicle.speed - DELTA_SPEED
+        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+            return self._low_level_control(target_speed, ego_lane_index)
+        # deceleration x2
+        target_speed = self.env.vehicle.speed - 2 * DELTA_SPEED
+        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+            return self._low_level_control(target_speed, ego_lane_index)
+        # deceleration x3
+        target_speed = self.env.vehicle.speed - 3 * DELTA_SPEED
+        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+            return self._low_level_control(target_speed, ego_lane_index)
+        # default
+        return self._low_level_control(self.env.vehicle.speed, ego_lane_index)
+
+    @property
+    def switchable(self, delta_speed_x = 1.2 * DELTA_SPEED) -> bool:
+        switchable = True
+        ego_vehicle = self.env.vehicle
+        ego_speed = ego_vehicle.speed
+        for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
+            if 0 <= self.compute_ttc(ego_speed - delta_speed_x, lane_index) <= SW_TIME_THD + DEFAULT_DELAY_TORRENCE:
+                switchable = False
+        for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
+            if 0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= SW_TIME_THD + DEFAULT_DELAY_TORRENCE:
+                switchable = False
+        return switchable
+
+    def _low_level_control(self, target_speed, target_lane):
+        position = self.env.vehicle.position
+        heading = self.env.vehicle.heading
+        speed = self.env.vehicle.speed
+        return self.converter.convert_to_control_parameters(target_speed=target_speed,
+                                                            target_lane=target_lane,
+                                                            position=position,
+                                                            heading=heading,
+                                                            speed=speed)
+
+
+
+class PlanningBasedController:
     """A secondary controller used by the safeguard"""
 
     def __init__(

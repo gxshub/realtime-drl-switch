@@ -25,6 +25,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
 from tqdm import tqdm
 
+from rt_drl_safeguard.safeguard.highway_safeguard import TtcBasedController, DEFAULT_DELAY_TORRENCE
 from rt_drl_safeguard.safeguard.highway_safeguard import HighwayAgentSafeguard
 from rt_drl_safeguard.utils.factory import load_agent_class, load_environment
 from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
@@ -231,31 +232,46 @@ def infer(env,
           random_delay: bool = False,
           safeguard: bool = False):
     sg = HighwayAgentSafeguard(env)
+    sec_controller = TtcBasedController(env)
     episode_rewards = []
     episode_lengths = []
     n_crashes = 0
     with_delay = True if rtc_seed > 0 else False
+    n_agent_controls_steps = 0
+    n_total_timesteps = 0
+    road_info = None
     for _ in tqdm(range(n_episodes)):
+        n_total_timesteps += 1
         reward_acc = 0.
         timestep = 0
         done = truncated = False
         obs, info = env.reset()
-        # sg.update()
         delay = 0
+        controlled_by_agent = True
+        action = None
         while not (done or truncated):
-            action, _states = agent.predict(obs, deterministic=True)
-            # print("action: ", action)
+
+            if not controlled_by_agent and sec_controller.switchable:
+                controlled_by_agent = True
             if with_delay:
                 # randomize delay
                 if random_delay:
                     delay = exp_delay(rtc_seed)
                 else:
                     delay = rtc_seed
-                if safeguard:
-                    action, delay, _ = sg.assure(action, delay)
+            # print("sim delay:", delay)
+            if controlled_by_agent and safeguard and delay > DEFAULT_DELAY_TORRENCE:
+                controlled_by_agent = False
+            if controlled_by_agent:
+                action, _ = agent.predict(obs, deterministic=True)
+                n_agent_controls_steps += 1
+            else:
+                delay = np.min([delay, DEFAULT_DELAY_TORRENCE])
+                action = sec_controller.control()
+            road_info = get_road_info(env)
+            # print("action: {}, delay: {}".format(action, delay))
             env.delay = delay
             obs, reward, done, truncated, info = env.step(action)
-            # sg.update()
             reward_acc += reward
             timestep += 1
         episode_rewards.append(reward_acc)
@@ -263,8 +279,74 @@ def infer(env,
         crashed = env.unwrapped.vehicle.crashed
         if crashed:
             n_crashes += 1
-        print("crashed: ", crashed)
+        print("!!!crashed: ", crashed)
+        if crashed:
+            print("controlled_by_agent: ", controlled_by_agent)
+            print("action: ", action)
+            print("before crash: " , road_info)
+            print("crashed vehicle id: ", get_crashed_vehicle(env))
+    print("proportion of timesteps controlled by agents: {} ".format(n_agent_controls_steps / n_total_timesteps))
     return np.mean(episode_rewards), np.mean(episode_lengths), n_crashes / n_episodes
+
+
+def get_road_info(env):
+    ego_vehicle = env.unwrapped.vehicle
+    ego_speed = ego_vehicle.speed
+    status = [{'speed': round(ego_speed,2), 'lane index': ego_vehicle.lane_index[2]}]
+    num_roads = len(env.unwrapped.road.network.all_side_lanes(ego_vehicle.lane_index))
+    for i in range(num_roads):
+        ttc = np.inf
+        on_lane_distance = np.inf
+        relative_speed = 0
+        is_crashed = False
+        id = None
+        ttc_r = np.inf
+        on_lane_distance_r = -np.inf
+        relative_speed_r = 0
+        is_crashed_r = False
+        id_r = None
+        for other in env.unwrapped.road.vehicles:
+            if other is not ego_vehicle and other.lane_index[2] == i:
+            # if other is not ego_vehicle and other.lane_index == ego_vehicle.lane_index:
+                margin = other.LENGTH / 2 + ego_vehicle.LENGTH / 2
+                on_lane_distance_x = ego_vehicle.lane_distance_to(other) - margin
+                # relative_speed_x = ego_speed - other.speed
+                relative_speed_x = ego_speed - other.speed * np.dot(
+                    other.direction, ego_vehicle.direction
+                )
+                ttc_x = on_lane_distance_x / relative_speed_x
+                if 0 < on_lane_distance_x < on_lane_distance:
+                    ttc = ttc_x
+                    on_lane_distance = on_lane_distance_x
+                    relative_speed = relative_speed_x
+                    if other.crashed:
+                        is_crashed = True
+                    id = env.unwrapped.road.vehicles.index(other)
+                if on_lane_distance_r < on_lane_distance_x < 0:
+                    ttc_r = ttc_x
+                    on_lane_distance_r = on_lane_distance_x
+                    relative_speed_r = relative_speed_x
+                    if other.crashed:
+                        is_crashed_r = True
+                    id_r = env.unwrapped.road.vehicles.index(other)
+
+        status.extend([{'dist (f)': round(on_lane_distance,1),
+                       'ttc (f)': round(ttc,1),
+                       'rel spd (f)': round(relative_speed,1),
+                       'crashed (f)': is_crashed,
+                       'VID': id,
+                       'lane': i},
+                      {'dist (b)': round(on_lane_distance_r,1),
+                       'ttc (b)': round(ttc_r,1),
+                       'rel spd (b)': round(relative_speed_r,1),
+                       'crashed (b)': is_crashed_r,
+                       'VID': id_r,
+                       'lane': i}])
+    return status
+
+def get_crashed_vehicle(env):
+    vehicles = env.unwrapped.road.vehicles
+    return [vehicles.index(x) for x in vehicles if x.crashed]
 
 
 if __name__ == "__main__":

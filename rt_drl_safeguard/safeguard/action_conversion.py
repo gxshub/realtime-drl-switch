@@ -3,6 +3,7 @@ from typing import List, Union, Tuple
 
 import numpy as np
 from highway_env.vehicle.controller import MDPVehicle
+from highway_env.road.road import LaneIndex
 
 from rt_drl_safeguard.safeguard.meta_control_data import MAX_SPEED, MIN_SPEED, SPEED_LEVELS, DELTA_SPEED
 
@@ -13,7 +14,7 @@ class ActionConvertor(MDPVehicle):
             self,
             env
     ) -> None:
-        road = copy.deepcopy(env.road)
+        road = copy.deepcopy(env.unwrapped.road)
         position = copy.deepcopy(env.unwrapped.vehicle.position)
         heading = 0.0
         speed = 0.0
@@ -28,6 +29,40 @@ class ActionConvertor(MDPVehicle):
         # print("self.speed_change_range: ", self.speed_change_range)
         assert len(self.speed_change_range) == SPEED_LEVELS
         self.num_actions = SPEED_LEVELS
+
+    def convert_to_control_parameters(self,
+                target_speed: float,
+                target_lane: LaneIndex,
+                position: List[float],
+                heading: float,
+                speed: float) -> np.ndarray:
+        self.set_position(position)
+        self.set_heading(heading)
+        self.set_speed(speed)
+        self.on_state_update()
+
+        self.target_speed = target_speed
+        self.target_speed = np.clip(self.target_speed, self.min_speed, self.max_speed)
+        self.target_lane_index = target_lane
+
+        converted_action = {
+            "steering": self.steering_control(self.target_lane_index),
+            "acceleration": self.speed_control(self.target_speed),
+        }
+        converted_action["steering"] = np.clip(
+            converted_action["steering"], self.steering_range[0], self.steering_range[1]
+        )
+        # converted_action["steering"] = 0.0
+        converted_action["acceleration"] = np.clip(
+            converted_action["acceleration"], self.acceleration_range[0], self.acceleration_range[1]
+        )
+        ac = lmap(converted_action["acceleration"], self.acceleration_range, [-1, 1])
+        st = lmap(converted_action["steering"], self.steering_range, [-1, 1])
+
+        # print("@@@ current speed: {}, target speed: {}, ".format(self.speed, self.target_speed),
+        #      "acceleration: {}, steering: {},".format(converted_action["acceleration"], converted_action["steering"]),
+        #      "scaled_acceleration: {}, scaled_steering: {}".format(ac, st))
+        return np.array([ac, st])
 
     def convert(self,
                 action: int,
@@ -60,8 +95,8 @@ class ActionConvertor(MDPVehicle):
         ac = lmap(converted_action["acceleration"], self.acceleration_range, [-1, 1])
         st = lmap(converted_action["steering"], self.steering_range, [-1, 1])
 
-        print("@@@ current speed: {}, target speed: {} ".format(self.speed, self.target_speed),
-              "acceleration: {}, steering: {}".format(converted_action["acceleration"], converted_action["steering"]))
+        # print("@@@ current speed: {}, target speed: {} ".format(self.speed, self.target_speed),
+        #      "acceleration: {}, steering: {}".format(converted_action["acceleration"], converted_action["steering"]))
         return np.array([ac, st])
 
     def set_position(self, position):
