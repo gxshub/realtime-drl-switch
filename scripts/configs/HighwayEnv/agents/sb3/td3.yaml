@@ -1,0 +1,12 @@
+__class__: <class 'stable_baselines3.td3.TD3'>
+policy: 'MlpPolicy'
+gamma: 0.98
+buffer_size: 200000
+learning_starts: 1000
+noise_type: 'normal'
+noise_std: 0.1
+batch_size: 64
+train_freq: 1
+learning_rate: !!float 5e-4
+policy_kwargs: "dict(net_arch=[400, 300])"
+verbose: 2

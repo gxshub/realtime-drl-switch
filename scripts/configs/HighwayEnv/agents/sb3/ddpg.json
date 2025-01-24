@@ -1,0 +1,15 @@
+{
+  "__class__": "<class 'stable_baselines3.ddpg.DDPG'>",
+  "policy": "MlpPolicy",
+  "policy_kwargs": {
+    "net_arch": [400, 300]
+  },
+  "buffer_size": 200000,
+  "learning_starts": 1000,
+  "noise_type": "normal",
+  "noise_std": 0.1,
+  "batch_size": 64,
+  "learning_rate": 5e-4,
+  "gamma": 0.98,
+  "verbose": 2
+}

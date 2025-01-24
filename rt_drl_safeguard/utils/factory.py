@@ -5,9 +5,12 @@ import os
 import yaml
 from typing import Any, Callable, Dict, Optional, Type, Union
 
+import numpy as np
+
 import gymnasium as gym
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
+from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 
 from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
 
@@ -33,6 +36,20 @@ def agent_factory(environment, agent_config):
         agent_config.pop("__class__")
         if policy is None:
             raise ValueError("The configuration should specify 'policy'")
+        noise_type = agent_config.get("noise_type")
+        if noise_type is not None:
+            noise_std = agent_config.get("noise_std", 0.1)
+            n_actions = environment.action_space.shape[-1]
+            if noise_type == "normal":
+                agent_config["action_noise"] = NormalActionNoise(mean=np.zeros(n_actions), sigma=noise_std * np.ones(n_actions))
+            elif noise_type == "ornstein-uhlenbeck":
+                agent_config["action_noise"] = OrnsteinUhlenbeckActionNoise(
+                    mean=np.zeros(n_actions), sigma=noise_std * np.ones(n_actions)
+                )
+            else:
+                raise ValueError("Noise type not supported (use 'normal' or 'ornstein-uhlenbeck')")
+        agent_config.pop("noise_type", None)
+        agent_config.pop("noise_std", None)
         agent = agent_class(policy, environment, **agent_config)
         return agent
     else:

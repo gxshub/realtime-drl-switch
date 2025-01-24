@@ -1,5 +1,4 @@
-from operator import index
-from typing import TypeVar, Tuple
+from typing import TypeVar
 
 import numpy as np
 from highway_env import utils
@@ -10,27 +9,9 @@ from rt_drl_safeguard.safeguard.meta_control_data import *
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
-DEFAULT_DELAY_TORRENCE = 0.5 # s
-ACC_TIME_THD = 5.0 # s
-SW_TIME_THD = 5.0 #s
-
-class HighwayAgentSafeguard:
-
-    def __init__(self,
-                 env: RTEnv,
-                 delay_torrence: float = DEFAULT_DELAY_TORRENCE):
-        self.env = env
-        # self.secondary_controller = PlanningBasedController(env)
-        self.secondary_controller = TtcBasedController(env)
-        self.delay_torrence = delay_torrence
-        self.secondary_controller.delay = self.delay_torrence
-
-    def assure(self, a: Action, t: float) -> Tuple[Action, float, str]:
-        if t <= self.delay_torrence:
-            return a, t, "normal"
-        else:
-            a = self.secondary_controller.control()
-            return a, self.delay_torrence, "urgent"
+DEFAULT_DELAY_TOLERANCE = 0.5  # s
+ACC_TIME_THD = 5.0  # s
+SW_TIME_THD = 5.0  # s
 
 
 class TtcBasedController:
@@ -38,17 +19,13 @@ class TtcBasedController:
 
     def __init__(
             self,
-            env: RTEnv):
+            env: RTEnv,
+            delay_tolerance=DEFAULT_DELAY_TOLERANCE):
         self.env = env.unwrapped
-        self.horizon = DEFAULT_HORIZON
-        self.time_quantization = DEFAULT_TIME_QUANTIZATION
         self.num_actions = SPEED_LEVELS
-        self.speed_levels = SPEED_LEVELS
         self.delta_speed = DELTA_SPEED
-        self.idle_action = int((self.speed_levels  + 1) / 2)
         self.converter = ActionConvertor(env)
-        assert self.speed_levels % 2 == 1
-        self.delay = 0
+        self.delay_tolerance = delay_tolerance
 
     def compute_ttc(self, target_speed, target_lane_index):
         ego_vehicle = self.env.vehicle
@@ -68,45 +45,34 @@ class TtcBasedController:
                 ttc_x = on_lane_distance_x / relative_speed_x
                 if 0 < ttc_x < ttc:
                     ttc = ttc_x
-        return  ttc
+        return ttc
 
-    def control(self, acc_time_threshold = ACC_TIME_THD) -> np.ndarray:
-        acc_time_threshold += DEFAULT_DELAY_TORRENCE
+    def control(self, acc_time_threshold=ACC_TIME_THD) -> np.ndarray:
+        acc_time_threshold += self.delay_tolerance
         ego_lane_index = self.env.vehicle.lane_index
-        # acceleration
-        target_speed = self.env.vehicle.speed + DELTA_SPEED
-        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
-            return self._low_level_control(target_speed, ego_lane_index)
-        # keep speed
-        target_speed = self.env.vehicle.speed
-        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
-            return self._low_level_control(target_speed, ego_lane_index)
-        # deceleration
-        target_speed = self.env.vehicle.speed - DELTA_SPEED
-        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
-            return self._low_level_control(target_speed, ego_lane_index)
-        # deceleration x2
-        target_speed = self.env.vehicle.speed - 2 * DELTA_SPEED
-        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
-            return self._low_level_control(target_speed, ego_lane_index)
-        # deceleration x3
-        target_speed = self.env.vehicle.speed - 3 * DELTA_SPEED
-        if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
-            return self._low_level_control(target_speed, ego_lane_index)
+        # e.g., 0.5 indicates a speed change of +0.5*DELTA_SPEED
+        # -2.0 indicates a speed change of -2.0*DELTA_SPEED
+        speed_changes_coeffs = [0.1, 0.05, 0, -0.1, -0.25, -0.5, -1.0, -2.0, -3.0]
+        for x in speed_changes_coeffs:
+            target_speed = self.env.vehicle.speed + x * DELTA_SPEED
+            if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+                return self._low_level_control(target_speed, ego_lane_index)
         # default
         return self._low_level_control(self.env.vehicle.speed, ego_lane_index)
 
     @property
-    def switchable(self, delta_speed_x = 1.2 * DELTA_SPEED) -> bool:
+    def switchable(self, delta_speed_x=1.2 * DELTA_SPEED) -> bool:
         switchable = True
+        max_switchable_ttc = SW_TIME_THD + self.delay_tolerance
         ego_vehicle = self.env.vehicle
         ego_speed = ego_vehicle.speed
         for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
-            if 0 <= self.compute_ttc(ego_speed - delta_speed_x, lane_index) <= SW_TIME_THD + DEFAULT_DELAY_TORRENCE:
+            if 0 <= self.compute_ttc(ego_speed - delta_speed_x, lane_index) <= max_switchable_ttc or \
+                    0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= max_switchable_ttc:
                 switchable = False
-        for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
-            if 0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= SW_TIME_THD + DEFAULT_DELAY_TORRENCE:
-                switchable = False
+        # for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
+        #    if 0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= max_switchable_ttc:
+        #        switchable = False
         return switchable
 
     def _low_level_control(self, target_speed, target_lane):
@@ -118,7 +84,6 @@ class TtcBasedController:
                                                             position=position,
                                                             heading=heading,
                                                             speed=speed)
-
 
 
 class PlanningBasedController:
@@ -133,7 +98,7 @@ class PlanningBasedController:
         self.num_actions = SPEED_LEVELS
         self.speed_levels = SPEED_LEVELS
         self.delta_speed = DELTA_SPEED
-        self.idle_action = int((self.speed_levels  + 1) / 2)
+        self.idle_action = int((self.speed_levels + 1) / 2)
         self.action_converter = ActionConvertor(env)
         assert self.speed_levels % 2 == 1
 
@@ -143,15 +108,15 @@ class PlanningBasedController:
         num_iterations = 10
         value = self._value_iteration(transition, reward, terminal, gamma, num_iterations)
         a_opt = self._get_best_action(state, value, transition)
-        #print("a_opt: ", a_opt)
-        #print("self._convert_to_lower_level_action(a_opt): ", self._convert_to_lower_level_action(a_opt))
+        # print("a_opt: ", a_opt)
+        # print("self._convert_to_lower_level_action(a_opt): ", self._convert_to_lower_level_action(a_opt))
         return self._convert_to_lower_level_action(a_opt)
 
     def _mdp(self):
-        collision_reward = -1 # self.env.config["collision_reward"]
-        right_lane_reward = 0 #self.env.config["right_lane_reward"]
-        high_speed_reward = 0 # self.env.config["high_speed_reward"]
-        lane_change_reward = 0 # self.env.config["lane_change_reward"]
+        collision_reward = -1  # self.env.config["collision_reward"]
+        right_lane_reward = 0  # self.env.config["right_lane_reward"]
+        high_speed_reward = 0  # self.env.config["high_speed_reward"]
+        lane_change_reward = 0  # self.env.config["lane_change_reward"]
 
         # Compute TTC grid
         grid = self._ttc_grid()
@@ -206,10 +171,10 @@ class PlanningBasedController:
         :param a: action index
         :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
         """
-        left = False # a == 0
-        right = False # a == 1
-        speed_change = j== 0 #(a > 1) & (j == 0)
-        a0 = self.idle_action # +2
+        left = False  # a == 0
+        right = False  # a == 1
+        speed_change = j == 0  # (a > 1) & (j == 0)
+        a0 = self.idle_action  # +2
 
         if left:
             next_s = self._clip_position(h, i - 1, j + 1, grid)
@@ -272,8 +237,8 @@ class PlanningBasedController:
                                 grid[speed_index, lane, time] = np.maximum(
                                     grid[speed_index, lane, time], cost
                                 )
-        #indices = {1: self.env.vehicle.lane_index}
-        #ix = [indices.get(dim, slice(None)) for dim in range(grid.ndim)]
+        # indices = {1: self.env.vehicle.lane_index}
+        # ix = [indices.get(dim, slice(None)) for dim in range(grid.ndim)]
         # print("tcc grid at current range", grid[ix])
         status = []
         for other in self.env.road.vehicles:
@@ -281,11 +246,12 @@ class PlanningBasedController:
                 margin = other.LENGTH / 2 + vehicle.LENGTH / 2
                 on_lane_distance = vehicle.lane_distance_to(other) - margin
                 relative_speed = vehicle.speed - other.speed
-                #relative_speed = vehicle.speed - other.speed * np.dot(
+                # relative_speed = vehicle.speed - other.speed * np.dot(
                 #    other.direction, vehicle.direction
-                #)
+                # )
                 ttc = on_lane_distance / relative_speed
-                status.append(({'on-lane distance': on_lane_distance}, {'relative speed': relative_speed}, {'ttc': ttc}))
+                status.append(
+                    ({'on-lane distance': on_lane_distance}, {'relative speed': relative_speed}, {'ttc': ttc}))
 
         # distances.sort()
         print("!!!ttc status: ", status)
@@ -332,7 +298,7 @@ class PlanningBasedController:
                 v = value[transition[state, a]]
                 a_out = a
         # print("q value: ", [value[transition[state, a]] for a in range(self.num_actions)])
-        return a_out # np.argmax([value[transition[state, a]] for a in range(self.num_actions)])
+        return a_out  # np.argmax([value[transition[state, a]] for a in range(self.num_actions)])
 
     def _convert_to_lower_level_action(self, action):
         position = self.env.vehicle.position
