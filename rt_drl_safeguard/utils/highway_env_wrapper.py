@@ -20,7 +20,7 @@ class RealtimeHighway(Wrapper):
         for _ in range(self.delayed_frequency):
             self.env.unwrapped.road.act()
             self.env.unwrapped.road.step(1 / self.env.unwrapped.config["simulation_frequency"])
-            self.env.unwrapped._automatic_rendering()
+            # self.env.unwrapped._automatic_rendering()
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, reward, terminated, truncated, info
 

@@ -1,7 +1,7 @@
 """
 Usage:
-  evaluate <environment> <agent> <checkpoint> [options]
-  evaluate -h | --help
+  evaluation <environment> <agent> <checkpoint> [options]
+  evaluation -h | --help
 
 Options:
   -h --help              Show this screen.

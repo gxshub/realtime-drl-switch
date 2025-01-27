@@ -5,7 +5,7 @@ import numpy as np
 from highway_env.road.road import LaneIndex
 from highway_env.vehicle.controller import MDPVehicle
 
-from rt_drl_safeguard.safeguard.meta_control_data import MAX_SPEED, MIN_SPEED, SPEED_LEVELS, DELTA_SPEED
+from rt_drl_safeguard.safeguard.meta_control_data import *
 
 
 class ActionConvertor(MDPVehicle):
@@ -21,20 +21,20 @@ class ActionConvertor(MDPVehicle):
         super().__init__(
             road, position, heading, speed
         )
-        self.max_speed = MAX_SPEED
-        self.min_speed = MIN_SPEED
+        self.max_speed = CTRL_PARAMS['MAX_SPEED']
+        self.min_speed = CTRL_PARAMS['MIN_SPEED']
         self.acceleration_range = env.unwrapped.action_type.acceleration_range
         self.steering_range = env.unwrapped.action_type.steering_range
         self.speed_change_range = np.linspace(-1, 1, SPEED_LEVELS) * DELTA_SPEED
         assert len(self.speed_change_range) == SPEED_LEVELS
         self.num_actions = SPEED_LEVELS
 
-    def convert_to_control_parameters(self,
-                                      target_speed: float,
-                                      target_lane: LaneIndex,
-                                      position: List[float],
-                                      heading: float,
-                                      speed: float) -> np.ndarray:
+    def low_level_control(self,
+                          target_speed: float,
+                          target_lane: LaneIndex,
+                          position: List[float],
+                          heading: float,
+                          speed: float) -> np.ndarray:
         self.set_position(position)
         self.set_heading(heading)
         self.set_speed(speed)
@@ -59,6 +59,7 @@ class ActionConvertor(MDPVehicle):
 
         return np.array([ac, st])
 
+    """
     def convert(self,
                 action: int,
                 position: List[float],
@@ -91,6 +92,7 @@ class ActionConvertor(MDPVehicle):
         st = lmap(converted_action["steering"], self.steering_range, [-1, 1])
 
         return np.array([ac, st])
+    """
 
     def set_position(self, position):
         self.position = position

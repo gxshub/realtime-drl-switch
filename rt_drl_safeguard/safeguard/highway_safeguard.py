@@ -9,23 +9,20 @@ from rt_drl_safeguard.safeguard.meta_control_data import *
 RTEnv = TypeVar("RTEnv")
 Action = TypeVar("Action")
 
-DEFAULT_DELAY_TOLERANCE = 0.5  # s
-ACC_TIME_THD = 5.0  # s
-SW_TIME_THD = 5.0  # s
-
 
 class TtcBasedController:
     """A controller for safeguard directly based on ttc"""
 
     def __init__(
             self,
-            env: RTEnv,
-            delay_tolerance=DEFAULT_DELAY_TOLERANCE):
+            env: RTEnv):
         self.env = env.unwrapped
-        self.num_actions = SPEED_LEVELS
-        self.delta_speed = DELTA_SPEED
         self.converter = ActionConvertor(env)
-        self.delay_tolerance = delay_tolerance
+        self.delta_speed = CTRL_PARAMS['DELTA_SPEED']
+        self.acc_delta_multipliers = CTRL_PARAMS['ACC_DELTA_MULTIPLIERS']
+        self.acc_time_threshold = CTRL_PARAMS['ACC_TIME_THD']
+        self.sw_time_threshold = CTRL_PARAMS['SW_TIME_THD']
+        self.sw_delta_speed = CTRL_PARAMS['SW_DELTA_SPEED']
 
     def compute_ttc(self, target_speed, target_lane_index):
         ego_vehicle = self.env.vehicle
@@ -47,43 +44,36 @@ class TtcBasedController:
                     ttc = ttc_x
         return ttc
 
-    def control(self, acc_time_threshold=ACC_TIME_THD) -> np.ndarray:
-        acc_time_threshold += self.delay_tolerance
+    def control(self) -> np.ndarray:
         ego_lane_index = self.env.vehicle.lane_index
-        # e.g., 0.5 indicates a speed change of +0.5*DELTA_SPEED
-        # -2.0 indicates a speed change of -2.0*DELTA_SPEED
-        speed_changes_coeffs = [0.1, 0.05, 0, -0.1, -0.25, -0.5, -1.0, -2.0, -3.0]
-        for x in speed_changes_coeffs:
-            target_speed = self.env.vehicle.speed + x * DELTA_SPEED
-            if self.compute_ttc(target_speed, ego_lane_index) >= acc_time_threshold:
+        acc_delta_speed_range = [x * self.delta_speed for x in self.acc_delta_multipliers]
+        for delta_x in acc_delta_speed_range:
+            target_speed = self.env.vehicle.speed + delta_x
+            if self.compute_ttc(target_speed, ego_lane_index) >= self.acc_time_threshold:
                 return self._low_level_control(target_speed, ego_lane_index)
         # default
         return self._low_level_control(self.env.vehicle.speed, ego_lane_index)
 
     @property
-    def switchable(self, delta_speed_x=1.2 * DELTA_SPEED) -> bool:
+    def switchable(self, delta_factor=1.2) -> bool:
         switchable = True
-        max_switchable_ttc = SW_TIME_THD + self.delay_tolerance
         ego_vehicle = self.env.vehicle
         ego_speed = ego_vehicle.speed
         for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
-            if 0 <= self.compute_ttc(ego_speed - delta_speed_x, lane_index) <= max_switchable_ttc or \
-                    0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= max_switchable_ttc:
+            if 0 <= self.compute_ttc(ego_speed - self.sw_delta_speed, lane_index) <= self.sw_time_threshold or \
+                    0 <= self.compute_ttc(ego_speed + self.sw_delta_speed, lane_index) <= self.sw_time_threshold:
                 switchable = False
-        # for lane_index in self.env.road.network.all_side_lanes(ego_vehicle.lane_index):
-        #    if 0 <= self.compute_ttc(ego_speed + delta_speed_x, lane_index) <= max_switchable_ttc:
-        #        switchable = False
         return switchable
 
     def _low_level_control(self, target_speed, target_lane):
         position = self.env.vehicle.position
         heading = self.env.vehicle.heading
         speed = self.env.vehicle.speed
-        return self.converter.convert_to_control_parameters(target_speed=target_speed,
-                                                            target_lane=target_lane,
-                                                            position=position,
-                                                            heading=heading,
-                                                            speed=speed)
+        return self.converter.low_level_control(target_speed=target_speed,
+                                                target_lane=target_lane,
+                                                position=position,
+                                                heading=heading,
+                                                speed=speed)
 
 
 class PlanningBasedController:
@@ -108,8 +98,6 @@ class PlanningBasedController:
         num_iterations = 10
         value = self._value_iteration(transition, reward, terminal, gamma, num_iterations)
         a_opt = self._get_best_action(state, value, transition)
-        # print("a_opt: ", a_opt)
-        # print("self._convert_to_lower_level_action(a_opt): ", self._convert_to_lower_level_action(a_opt))
         return self._convert_to_lower_level_action(a_opt)
 
     def _mdp(self):
@@ -290,7 +278,6 @@ class PlanningBasedController:
         return q_value.max(axis=-1)
 
     def _get_best_action(self, state, value, transition) -> int:
-        n_actions = self.num_actions
         v = -np.inf
         a_out = self.num_actions
         for a in reversed(range(self.num_actions)):
@@ -304,4 +291,6 @@ class PlanningBasedController:
         position = self.env.vehicle.position
         heading = self.env.vehicle.heading
         speed = self.env.vehicle.speed
-        return self.action_converter.convert(action, position, heading, speed)
+        target_speed = speed + (action - self.idle_action) * self.delta_speed
+        lane_index = self.env.vehicle.lane_index
+        return self.action_converter.low_level_control(target_speed, lane_index, position, heading, speed)

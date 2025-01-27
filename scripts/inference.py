@@ -1,8 +1,8 @@
 """
 Usage:
-  infer <environment> <agent> <checkpoint> [options]
-  infer <environment> [options]
-  infer -h | --help
+  inference <environment> <agent> <checkpoint> [options]
+  inference <environment> [options]
+  inference -h | --help
 
 Options:
   -h --help              Show this screen.
@@ -12,7 +12,7 @@ Options:
   --random-delay         Randomised delay
   --safeguard            Whether the system is safeguarded or not.
   --controller-only      Use controller only
-  --controller-delay-tol <float>    Delay tolerance for controller
+  --delay-tol <float>    Delay tolerance for controller [default: 0.2]
   --no-display           Disable environment, agent, and rewards rendering.
   --test                 Do not save model or log in the test mode.
   --verbose
@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 
 import numpy as np
 from docopt import docopt
+from rt_drl_safeguard.safeguard.meta_control_data import CTRL_PARAMS
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
 from tqdm import tqdm
@@ -35,7 +36,7 @@ from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
 from rt_drl_safeguard.utils.randomization import exp_delay
 
 Agent = TypeVar("Agent")
-OUTPUT_FOLDER = "infer_results"
+DEFAULT_SAFE_TTC = 2  # s
 
 
 def main():
@@ -51,7 +52,7 @@ def main():
     safeguard = opts['--safeguard'] if not opts['--controller-only'] else False
     n_proc = int(opts['--processes'])
     controller_only = opts['--controller-only']
-    contr_delay_tol = float(opts['--controller-delay-tol']) if opts['--controller-delay-tol'] else None
+    delay_tol = float(opts['--delay-tol'])
     test_mode = opts['--test']
     verbose = opts['--verbose']
 
@@ -64,7 +65,7 @@ def main():
         result_folder = Path(__file__).parent / "out" / _env_name / "contr_infer_results" / version
         logger = configure(str(result_folder), ['stdout', 'log'])
     else:
-        result_folder = Path(model_file).parent / OUTPUT_FOLDER / version
+        result_folder = Path(model_file).parent / "infer_results" / version
         logger = configure(str(result_folder), ['stdout', 'log'])
 
     logger.log("Options:\n{}".format(opts),
@@ -78,16 +79,20 @@ def main():
         logger.log("Agent configuration:\n{}".format(open(agent_config_file).read()),
                    "\nLoad checkpoint file from: {}\n".format(model_file))
 
+    if controller_only or safeguard:
+        logger.log("controller parameters: {}".format(CTRL_PARAMS))
+
     if n_proc == 1:
         env, _ = load_environment(env_config_file, training=False, n_envs=1)
         env = RealtimeHighway(env)
-        if contr_delay_tol is not None:
-            controller = TtcBasedController(env, delay_tolerance=contr_delay_tol)
-        else:
-            controller = TtcBasedController(env)
-        avg_epi_rew, avg_epi_len, crash_rate = infer(env, agent, controller, n_episodes, rtc_seed=rtc_seed,
-                                                     random_delay=random_delay, safeguard=safeguard,
-                                                     controller_only=controller_only, logger=logger,
+        controller = TtcBasedController(env)
+        avg_epi_rew, avg_epi_len, crash_rate = infer(env, agent, controller, n_episodes,
+                                                     rtc_seed=rtc_seed,
+                                                     random_delay=random_delay,
+                                                     safeguard=safeguard,
+                                                     controller_only=controller_only,
+                                                     delay_tol=delay_tol,
+                                                     logger=logger,
                                                      verbose=verbose)
     else:
         env, _ = load_environment(env_config_file, training=False, n_envs=n_proc, realtime=True)
@@ -108,6 +113,7 @@ def infer(env,
           random_delay: bool = False,
           safeguard: bool = False,
           controller_only: bool = False,
+          delay_tol: float = np.inf,
           logger=None,
           verbose=False):
     episode_rewards = []
@@ -117,6 +123,8 @@ def infer(env,
     n_total_timesteps = 0
     n_agent_controls_steps = 0
     n_on_lane = 0
+    safe_ttc = DEFAULT_SAFE_TTC
+    n_small_ttc = 0
     road_info = None
     for _ in tqdm(range(n_episodes)):
         reward_acc: float = 0
@@ -132,28 +140,29 @@ def infer(env,
             if overridden_by_controller and controller.switchable:
                 overridden_by_controller = False
             if with_delay:
-                # randomize delay
+                # randomized delay
                 if random_delay:
                     delay = exp_delay(rtc_seed)
                 else:
                     delay = rtc_seed
-            if not controller_only and safeguard and delay > controller.delay_tolerance:
+            if not controller_only and safeguard and delay > delay_tol:
                 overridden_by_controller = True
-            if controller_only:
-                action = controller.control()
-            elif overridden_by_controller:
-                delay = controller.delay_tolerance
+            if controller_only or overridden_by_controller:
                 action = controller.control()
             else:
                 action, _ = agent.predict(obs, deterministic=True)
                 n_agent_controls_steps += 1
-            road_info = _get_closest_vehicles_info(env)
+            road_info = _nearby_vehicles_info(env)
+            i = road_info['ego']['lane index']
             if verbose:
-                i = road_info['ego']['lane index']
-                logger.log("[running info] lane: {}, speed: {}".format(road_info['ego']['lane index'],
-                                                                   road_info['ego']['speed']),
+                logger.log("[running info] lane: {}, speed: {}, action: {}".format(road_info['ego']['lane index'],
+                                                                                  road_info['ego']['speed'],
+                                                                                   action),
                            "\nfront ttc: {}, ttc back: {}".format(road_info[i]['front']['ttc'],
                                                                 road_info[i]['back']['ttc']))
+            if 0 <= road_info[i]['front']['ttc'] < safe_ttc or \
+                    0 <= road_info[i]['back']['ttc'] < safe_ttc:
+                n_small_ttc += 1
             env.delay = delay
             obs, reward, done, truncated, info = env.step(action)
             if info['rewards']['on_road_reward'] > 0:
@@ -167,18 +176,19 @@ def infer(env,
         crashed = env.unwrapped.vehicle.crashed
         if crashed:
             n_crashes += 1
-            logger.log("!!!crashed: {}".format(crashed))
+            logger.log("!!!crashed at timestep: {}".format(timestep))
             logger.log("controlled_by_agent: {}".format(not controller_only and not overridden_by_controller))
             logger.log("road info before delay: {}".format(road_info))
             logger.log("delay (s): {}".format(delay))
             logger.log("action [acceleration, steering]: {}".format(action))
             logger.log("crashed vehicles: {}".format(get_crashed_vehicle(env)))
-    logger.log("proportion of agent-controlled timesteps: {} ".format(n_agent_controls_steps / n_total_timesteps))
-    logger.log("proportion of on-lane timesteps: {} ".format(n_on_lane / n_total_timesteps))
+    logger.log("proportion of agent-controlled timesteps: {:.2%}".format(n_agent_controls_steps / n_total_timesteps))
+    logger.log("proportion of on-lane timesteps: {:.2%}".format(n_on_lane / n_total_timesteps))
+    logger.log("proportion of small ttc (i.e. <{}s): {:.2%}".format(safe_ttc, n_small_ttc / n_total_timesteps))
     return np.mean(episode_rewards), np.mean(episode_lengths), n_crashes / n_episodes
 
 
-def _get_closest_vehicles_info(env, all_lanes=False):
+def _nearby_vehicles_info(env, all_lanes=False):
     ego_vehicle = env.unwrapped.vehicle
     ego_speed = ego_vehicle.speed
     status = {'ego': {'speed': round(ego_speed, 2),
@@ -224,12 +234,12 @@ def _get_closest_vehicles_info(env, all_lanes=False):
                         is_crashed_r = True
                     id_r = env.unwrapped.road.vehicles.index(other)
         status[i] = {
-            'front': {'VID': vid,
+            'front': {'vid': vid,
                       'dist': round(on_lane_distance, 1),
                       'ttc': round(ttc, 1),
                       'rel spd': round(relative_speed, 1),
                       'crashed': is_crashed},
-            'back': {'VID': id_r,
+            'back': {'vid': id_r,
                     'dist': round(on_lane_distance_r, 1),
                      'ttc': round(ttc_r, 1),
                      'rel spd': round(relative_speed_r, 1),

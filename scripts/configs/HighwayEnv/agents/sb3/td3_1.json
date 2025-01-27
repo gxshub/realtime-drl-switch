@@ -1,0 +1,15 @@
+{
+  "__class__": "<class 'stable_baselines3.td3.TD3'>",
+  "policy": "MlpPolicy",
+  "policy_kwargs": {
+    "net_arch": [400, 300]
+  },
+  "buffer_size": 1000000,
+  "learning_starts": 10000,
+  "noise_type": "normal",
+  "noise_std": 0.1,
+  "batch_size": 128,
+  "learning_rate": 5e-4,
+  "gamma": 0.98,
+  "verbose": 2
+}
