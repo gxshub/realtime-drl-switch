@@ -5,7 +5,7 @@
     "net_arch": [512, 512]
   },
   "buffer_size": 1000000,
-  "learning_starts": 10000,
+  "learning_starts": 1000,
   "noise_type": "normal",
   "noise_std": 0.1,
   "batch_size": 128,

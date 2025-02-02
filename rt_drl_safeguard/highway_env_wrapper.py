@@ -12,15 +12,18 @@ class RealtimeHighway(Wrapper):
         self.delay = 0.0
         self.delayed_frequency = 0
 
-    def step(
-            self, action: WrapperActType
-    ) -> Tuple[WrapperObsType, SupportsFloat, bool, bool, Dict[str, Any]]:
+    def elapse(self, delay, reset_steering=False):
+        self.delay = delay
+        if reset_steering:
+            self.env.unwrapped.vehicle.action["steering"] = 0
         self.delayed_frequency = int(self.delay * self.env.unwrapped.config["simulation_frequency"])
-        # print("[RealtimeHighway] delay: {}, delayed_frequency: {}".format(self.delay, self.delayed_frequency))
         for _ in range(self.delayed_frequency):
             self.env.unwrapped.road.act()
             self.env.unwrapped.road.step(1 / self.env.unwrapped.config["simulation_frequency"])
-            # self.env.unwrapped._automatic_rendering()
+
+    def step(
+            self, action: WrapperActType
+    ) -> Tuple[WrapperObsType, SupportsFloat, bool, bool, Dict[str, Any]]:
         obs, reward, terminated, truncated, info = self.env.step(action)
         return obs, reward, terminated, truncated, info
 
@@ -34,5 +37,3 @@ class RealtimeHighway(Wrapper):
 
     def set_delay(self, value):
         self._delay = value
-
-

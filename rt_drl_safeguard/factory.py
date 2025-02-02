@@ -12,8 +12,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 
-from rt_drl_safeguard.utils.highway_env_wrapper import RealtimeHighway
-
+from rt_drl_safeguard.highway_env_wrapper import RealtimeHighway
+from rt_drl_safeguard.highway_env_v2 import HighwayEnvV2
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +106,10 @@ def env_factory(env_config, realtime=False):
     if env_config.get("import_module", None):
         __import__(env_config["import_module"])
     try:
-        env = gym.make(env_config['id'], render_mode='rgb_array')
+        # env = gym.make(env_config['id'], render_mode='rgb_array')
         # Save env module in order to be able to import it again
-        env.import_module = env_config.get("import_module", None)
+        # env.import_module = env_config.get("import_module", None)
+        env = HighwayEnvV2()
     except KeyError:
         raise ValueError("The gym register id of the environment must be provided")
     except gym.error.UnregisteredEnv:

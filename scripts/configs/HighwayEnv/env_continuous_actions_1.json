@@ -1,0 +1,15 @@
+{
+  "id": "highway-v0",
+  "import_module": "highway_env",
+  "show_trajectories": false,
+  "action": {
+    "type": "ContinuousAction"
+  },
+  "collision_reward": -1,
+  "right_lane_reward": 0.5,
+  "high_speed_reward": 0.8,
+  "reward_speed_range": [15, 30],
+  "lane_change_reward": 0,
+  "reverse_reward": -1,
+  "name": "highway_env_continuous_actions"
+}

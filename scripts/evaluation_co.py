@@ -18,8 +18,8 @@ from docopt import docopt
 from stable_baselines3.common.logger import configure
 from tqdm import tqdm
 
-from rt_drl_safeguard.safeguard.highway_safeguard import PlanningBasedController, TtcBasedController
-from rt_drl_safeguard.utils.factory import load_environment
+from rt_drl_safeguard.highway_safeguard import TtcBasedController
+from rt_drl_safeguard.factory import load_environment
 
 OUTPUT_FOLDER = "contr_eval_results"
 
