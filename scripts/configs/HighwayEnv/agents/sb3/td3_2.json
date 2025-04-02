@@ -2,7 +2,7 @@
   "__class__": "<class 'stable_baselines3.td3.TD3'>",
   "policy": "MlpPolicy",
   "policy_kwargs": {
-    "net_arch": [512, 512]
+    "net_arch": [400, 300]
   },
   "buffer_size": 1000000,
   "learning_starts": 10000,

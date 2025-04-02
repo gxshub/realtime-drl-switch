@@ -94,7 +94,8 @@ def main():
               logger=logger,
               verbose=verbose)
     else:
-        env, _ = load_environment(env_config_file, training=False, n_envs=n_proc, realtime=True)
+        # TODO
+        env, _ = load_environment(env_config_file, training=False, n_envs=n_proc)
         infer_vec(env, agent, n_episodes, rtc_seed,
                   random_delay=random_delay, safeguard=safeguard)
 
@@ -152,22 +153,6 @@ def infer(env,
                 action, _ = agent.predict(obs, deterministic=True)
                 n_agent_controls_steps += 1
             road_info = _nearby_vehicles_info(env, all_lanes=True)
-            i = road_info['ego']['lane index']
-            if verbose:
-                logger.log("[running info] timestep: {}, controlled by agent: {}\n" \
-                           .format(timestep, not overridden_by_controller and not controller_only),
-                           "[running info] lane: {}, forward speed: {}, position: {}, heading: {}, action: {}, " \
-                           .format(road_info['ego']['lane index'],
-                                   road_info['ego']['forward speed'],
-                                   env.unwrapped.vehicle.position,
-                                   env.unwrapped.vehicle.heading,
-                                   action),
-                           "front ttc: {}, ttc back: {}".format(road_info[i]['front']['ttc'],
-                                                                road_info[i]['back']['ttc']))
-            # count small ttc/s for statistics purposes
-            if 0 <= road_info[i]['front']['ttc'] < safe_ttc or \
-                    0 <= road_info[i]['back']['ttc'] < safe_ttc:
-                n_small_ttc += 1
             if controller_only or overridden_by_controller:
                 env.elapse(delay, reset_steering=True)
             else:
@@ -180,9 +165,25 @@ def infer(env,
                 episode_rewards_agent.append(reward)
             if info['rewards']['on_road_reward'] > 0:
                 n_on_lane += 1
+            i = road_info['ego']['lane index']
             if verbose:
+                logger.log("[running info] timestep: {}, controlled by agent: {}, delay: {}, delay_tol: {}\n, " \
+                           .format(timestep, not overridden_by_controller and not controller_only, delay, delay_tol),
+                           "[running info] timestep: {}, lane: {}, forward speed: {}, position: {}, heading: {}, action: {}, " \
+                           .format(timestep,
+                                   road_info['ego']['lane index'],
+                                   road_info['ego']['forward speed'],
+                                   env.unwrapped.vehicle.position,
+                                   env.unwrapped.vehicle.heading,
+                                   action),
+                           "front ttc: {}, ttc back: {}" \
+                           .format(road_info[i]['front']['ttc'], road_info[i]['back']['ttc']))
                 logger.log("[running info] timestep: {}, reward: {}, details: {}" \
                            .format(timestep, reward, info['rewards']))
+            # count small ttc/s for statistics purposes
+            if 0 <= road_info[i]['front']['ttc'] < safe_ttc or \
+                    0 <= road_info[i]['back']['ttc'] < safe_ttc:
+                n_small_ttc += 1
             reward_acc += reward
         episode_rewards.append(reward_acc)
         episode_lengths.append(timestep)

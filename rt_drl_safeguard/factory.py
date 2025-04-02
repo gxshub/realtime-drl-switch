@@ -2,17 +2,15 @@ import importlib
 import json
 import logging
 import os
-import yaml
 from typing import Any, Callable, Dict, Optional, Type, Union
 
-import numpy as np
-
 import gymnasium as gym
+import numpy as np
+import yaml
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from rt_drl_safeguard.highway_env_wrapper import RealtimeHighway
 from rt_drl_safeguard.highway_env_v2 import HighwayEnvV2
 
 logger = logging.getLogger(__name__)
@@ -41,7 +39,8 @@ def agent_factory(environment, agent_config):
             noise_std = agent_config.get("noise_std", 0.1)
             n_actions = environment.action_space.shape[-1]
             if noise_type == "normal":
-                agent_config["action_noise"] = NormalActionNoise(mean=np.zeros(n_actions), sigma=noise_std * np.ones(n_actions))
+                agent_config["action_noise"] = NormalActionNoise(mean=np.zeros(n_actions),
+                                                                 sigma=noise_std * np.ones(n_actions))
             elif noise_type == "ornstein-uhlenbeck":
                 agent_config["action_noise"] = OrnsteinUhlenbeckActionNoise(
                     mean=np.zeros(n_actions), sigma=noise_std * np.ones(n_actions)
@@ -90,12 +89,11 @@ def load_agent_config(config_path):
     return _load_config(config_path)
 
 
-def env_factory(env_config, realtime=False):
+def env_factory(env_config):
     """
         Load an environment from a configuration file.
 
     :param env_config: the configuration, or path to the environment configuration file
-    :param realtime ...
     :return: the environment
     """
     # Load the environment config from file
@@ -109,6 +107,7 @@ def env_factory(env_config, realtime=False):
         # env = gym.make(env_config['id'], render_mode='rgb_array')
         # Save env module in order to be able to import it again
         # env.import_module = env_config.get("import_module", None)
+        """create highway_env_v2 instance directly"""
         env = HighwayEnvV2()
     except KeyError:
         raise ValueError("The gym register id of the environment must be provided")
@@ -127,8 +126,8 @@ def env_factory(env_config, realtime=False):
     except AttributeError as e:
         logger.info("This environment does not support configuration. {}".format(e))
 
-    if realtime:
-        env = RealtimeHighway(env)
+    # if realtime:
+    #    env = RealtimeHighway(env)
     return env
 
 
@@ -136,7 +135,6 @@ def vec_env_factory(
         # env_id: Union[str, Callable[..., gym.Env]],
         env_config: Union[str, Dict],
         n_envs: int = 1,
-        realtime: bool = False,
         seed: Optional[int] = None,
         start_index: int = 0,
         monitor_dir: Optional[str] = None,
@@ -154,7 +152,6 @@ def vec_env_factory(
 
     :param env_config: environment configuration
     :param n_envs: the number of environments you wish to have in parallel
-    :param realtime: ..
     :param seed: the initial seed for the random number generator
     :param start_index: start rank index
     :param monitor_dir: Path to a folder where the monitor files will be saved.
@@ -186,7 +183,7 @@ def vec_env_factory(
             assert wrapper_kwargs is not None
             assert env_kwargs is not None
 
-            env = env_factory(env_config, realtime)
+            env = env_factory(env_config)
 
             if seed is not None:
                 # Note: here we only seed the action space
@@ -217,29 +214,24 @@ def vec_env_factory(
     return vec_env
 
 
-def load_environment(env_config, training: bool=True, n_envs: int=4, realtime: bool=False):
+def load_environment(env_config, training: bool = True, n_envs: int = 1):
     """
         Load an environment from a configuration file.
 
     :param env_config: the configuration, or path to the environment configuration file
     :param training ..
     :param n_envs number of environments
-    :param realtime
     :return: the environment, name
     """
     if not isinstance(env_config, dict):
         env_config = _load_config(env_config)
 
-    if training and realtime:
-        raise Exception("the training environment must not be realtime")
-
     if n_envs == 1:
-        return env_factory(env_config, realtime=realtime), env_config.get("name", None)
+        return env_factory(env_config), env_config.get("name", None)
     elif n_envs > 1:
         return (vec_env_factory(env_config,
-                               n_envs=n_envs,
-                               vec_env_cls=SubprocVecEnv,
-                               realtime=realtime),
+                                n_envs=n_envs,
+                                vec_env_cls=SubprocVecEnv),
                 env_config.get("name", None))
     else:
         raise Exception("negative value for the number of environments")

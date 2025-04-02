@@ -14,7 +14,8 @@ Observation = np.ndarray
 
 class HighwayEnvV2(AbstractEnv):
     """
-    Highway driving environment v2, which fixes the issue of non-forward moving ego-vehicles.
+    This is a re-implementation of the highway driving environment,
+    which fixes the issue of non-forward moving ego-vehicles.
 
     The vehicle is driving on a straight highway with several lanes, and is rewarded for reaching a high speed,
     staying on the rightmost lanes and avoiding collisions.
@@ -46,8 +47,8 @@ class HighwayEnvV2(AbstractEnv):
                 "high_speed_reward": 0.4,  # The reward received when driving at full speed, linearly mapped to zero for
                 # lower speeds according to config["reward_speed_range"].
                 "lane_change_reward": 0,  # The reward received at each lane change action.
-                "reward_speed_range": [20, 30],
-                "reverse_reward": -1,  # The reward received when moving backward
+                "reward_speed_range": [0, 30],
+                "reverse_reward": -1,  # The reward received for reversing or non-forward heading
                 "normalize_reward": True,
                 "offroad_terminal": False,
             }
@@ -74,7 +75,6 @@ class HighwayEnvV2(AbstractEnv):
     def _reset(self) -> None:
         self._create_road()
         self._create_vehicles()
-        self._vehicle_position = self.vehicle.position[0]
 
     def _create_road(self) -> None:
         """Create a road composed of straight adjacent lanes."""
@@ -150,8 +150,8 @@ class HighwayEnvV2(AbstractEnv):
         )
         reverse_reward = np.abs(self.vehicle.heading)
         reverse_reward = utils.lmap(reverse_reward, [0.25 * np.pi, 0.5 * np.pi], [0, 1])
-        # (for convenience) if reversed, the vehicle is considered "crashed"
-        if not (-0.5 * np.pi < self.vehicle.heading < 0.5 * np.pi):
+        # if non-forward heading or reversing, make the vehicle "crashed"
+        if not (-0.5 * np.pi < self.vehicle.heading < 0.5 * np.pi) or forward_speed <= 0:
             self.vehicle.crashed = True
         return {
             "collision_reward": float(self.vehicle.crashed),

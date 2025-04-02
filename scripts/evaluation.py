@@ -52,7 +52,6 @@ def main():
     env, _ = load_environment(env_config_file, n_envs=n_proc)
     agent = load_agent_class(agent_config_file).load(Path(model_file))
 
-    # test(opts['<environment>'], opts['<agent>'], opts['<checkpoint>'], opts)
     avg_epi_rew, avg_epi_len, crash_rate = evaluate(env, agent, n_episodes)
 
     logger.log("Average episode accumulated reward: {}".format(avg_epi_rew))

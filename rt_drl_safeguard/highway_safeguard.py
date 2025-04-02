@@ -30,7 +30,7 @@ PL_CTRL_PARAMS = {
 }
 
 CON_PARAMS = {
-    'MAX_SPEED': 20.0,  # m/s
+    'MAX_SPEED': 18.0,  # m/s
     'MIN_SPEED': 0.0,  # m/s
 }
 
