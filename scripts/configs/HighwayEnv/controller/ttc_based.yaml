@@ -1,0 +1,10 @@
+ctrl_1:
+  speed_change_range: [0.5, 0.25, 0, -2.5, -5.0, -10.0, -15.0] # speed changes
+  ttc_threshold: 5.5  # s
+  max_speed: 18.0  # m/s
+  min_speed: 0.0  # m/s
+ctrl_2:
+  speed_change_range: [0.5, 0.25, 0, -2.5, -5.0, -10.0, -15.0] # speed changes
+  ttc_threshold: 4.5  # s
+  max_speed: 18.0  # m/s
+  min_speed: 0.0  # m/s

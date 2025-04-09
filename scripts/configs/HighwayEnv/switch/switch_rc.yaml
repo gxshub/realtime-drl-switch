@@ -1,0 +1,19 @@
+# switch configuration
+params:
+  - ctrl_id: ctrl_1
+    thresh:
+      time_delay: 0.2
+      cross_lane_headway: 2.0
+  - ctrl_id: ctrl_1
+    thresh:
+      time_delay: 0.1
+      cross_lane_headway: 2.0
+  - ctrl_id: ctrl_2
+    thresh:
+      time_delay: 0.2
+      cross_lane_headway: 2.0
+  - ctrl_id: ctrl_2
+    thresh:
+      time_delay: 0.1
+      cross_lane_headway: 2.0
+probs: [0.25, 0.25, 0.25, 0.25]

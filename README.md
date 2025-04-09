@@ -10,8 +10,8 @@ For evaluation:
 ```shell
 python evaluation.py \
 configs/HighwayEnv/env_continuous_actions.json \
-configs/HighwayEnv/agents/sb3/ppo.json \
-out/highway_env_continuous_actions/stable_baselines3.ppo.ppo/2024-10-08_23_18_16/best_model.zip \
+configs/HighwayEnv/agents/sb3/ddpg.json \
+out/highway_env_continuous_actions/stable_baselines3.ddpg.ddpg/2025-02-12_18_16_34/best_model.zip \
 --test
 ```
 
@@ -19,8 +19,8 @@ For real-time inference:
 ```shell
 python inference.py \
 configs/HighwayEnv/env_continuous_actions.json \
-configs/HighwayEnv/agents/sb3/ppo.json \
-out/highway_env_continuous_actions/stable_baselines3.ppo.ppo/2024-10-08_23_18_16/best_model.zip \
+configs/HighwayEnv/agents/sb3/ddpg.json \
+out/highway_env_continuous_actions/stable_baselines3.ddpg.ddpg/2025-02-12_18_16_34/best_model.zip \
 --test
 ```
 

@@ -1,0 +1,7 @@
+# parameters
+
+params:
+  - ctrl_id: 2
+    thresh:
+      time_delay: 0.2
+      cross_lane_headway: 2.0
