@@ -17,9 +17,9 @@ class Switch:
                  env: RTEnv,
                  primary_controller: Union[Controller, None],
                  secondary_controllers: Union[Dict[str, Controller], None],
-                 params_config: Union[List[Dict]],
+                 params_config: List[Dict],
                  probabilities: Union[np.ndarray, List, None],
-                 delay_time_distribution: DelayTimeDistribution):
+                 delay_time: Union[DelayTimeDistribution, float]):
 
         if primary_controller is None and secondary_controllers is None:
             raise ValueError("At least one controller must be available.")
@@ -35,11 +35,11 @@ class Switch:
         self.params_sampler = SwitchConfigurationSampler(params_config, probabilities)
         self.primary_controller = primary_controller
         self.secondary_controllers = secondary_controllers
-        self.delay_time_distribution = delay_time_distribution
+        self.delay_time = delay_time
 
     def run(self, num_episodes: int, pri_ctrl_only=False, logger=None):
 
-        if logger:
+        if logger is not None:
             logger.log("---Run Switch---")
 
         deterministic_config_in_use = True if self.params_sampler.size == 1 else False
@@ -49,7 +49,6 @@ class Switch:
         num_episodes_actual = 0
         num_crashes = 0
 
-        data_safety = []
         data_tran_freq = {"continue_with_sec_ctrl": 0, "can_switch_to_pri_ctrl": 0}
 
         params = self.params_sampler.get()
@@ -80,21 +79,24 @@ class Switch:
 
             while not (done or truncated):
 
-                delay_time = self.delay_time_distribution.sample()
+                if type(self.delay_time) is float:
+                    elapsed_time = self.delay_time
+                else:
+                    elapsed_time = self.delay_time.sample()
 
                 # If running the primary controller only
                 if pri_ctrl_only:
                     action = self.primary_controller.act(obs)
-                    self.env.elapse(delay_time)
+                    self.env.elapse(elapsed_time)
                     obs, reward, done, truncated, info = self.env.step(action)
                 else:
-                    if can_switch_to_pri_ctrl and delay_time < time_delay_threshold:
+                    if can_switch_to_pri_ctrl and elapsed_time < time_delay_threshold:
                         action = self.primary_controller.act(obs)
                     else:
                         action = self.secondary_controllers[sec_ctrl_id].act(obs)
                         using_sec_ctrl = True
                         consec_sec_ctrl_calls += 1
-                    self.env.elapse(delay_time)
+                    self.env.elapse(elapsed_time)
                     obs, reward, done, truncated, info = self.env.step(action)
 
                     # Check if we can switch to the primary controller
@@ -109,13 +111,9 @@ class Switch:
 
                 timestep += 1
                 tot_rwrd += reward
-                """
                 if logger is not None:
-                    logger("headway: {:.4f}, ttc: {:.4f}, on lane".format(self._headway, self._ttc, self._on_lane))
-                """
-                data_safety.append({"headway": round(self._headway, 3),
-                                    "ttc": round(self._ttc, 3),
-                                    "on lane": self._on_lane})
+                    logger.log("[data] headway: {:.4f}, cross_lane_headway: {:4f}, ttc: {:.4f}, on lane: {}" \
+                               .format(self._headway, self._cross_lane_headway, self._ttc, self._on_lane))
 
                 if self.env.unwrapped.vehicle.crashed:
                     num_crashes += 1
@@ -133,17 +131,16 @@ class Switch:
                                (np.sum(ep_rwrds) / num_episodes_actual) * 40 / (40 - WARMUP_STEPS)))
             logger.log("Crash rate (episode): {:.2%}".format(num_crashes / num_episodes_actual))
             logger.log("Crash rate (timestep): {:.4%}".format(num_crashes / np.sum(ep_lengths)))
-            if pri_ctrl_only:
-                logger.log("---Data for Model Building (primary controller only)---")
-                logger.log("[numerical values]: {}".format(data_safety))
-            elif deterministic_config_in_use:
-                logger.log("---Data for Model Building (specified configuration params)---")
-                logger.log("[probabilities] primary: {}, secondary: {}" \
-                           .format(self.delay_time_distribution.cumulative_probability_below(params["delay"]),
-                                   self.delay_time_distribution.cumulative_probability_above(params["delay"])))
-                logger.log("[counts] continue_with_sec_ctrl: {}, can_switch_to_pri_ctrl: {}" \
-                           .format(data_tran_freq["continue_with_sec_ctrl"], data_tran_freq["can_switch_to_pri_ctrl"]))
-                logger.log("[numerical values]: {}".format(data_safety))
+            if type(self.delay_time) is not float:
+                logger.log("[probabilities] - switch to pri or sec ctrls - primary: {}, secondary: {}" \
+                           .format(
+                    self.delay_time.cumulative_probability_below(float(params["thresh"]["time_delay"])),
+                    self.delay_time.cumulative_probability_above(float(params["thresh"]["time_delay"]))))
+            if not pri_ctrl_only and deterministic_config_in_use:
+                logger.log("[counts] - exit sec ctrl after {} consec calls - yes: {}, no: {}" \
+                           .format(MIN_CONSEC_SEC_CTRL_CALLS,
+                                   data_tran_freq["can_switch_to_pri_ctrl"],
+                                   data_tran_freq["continue_with_sec_ctrl"]))
 
     @property
     def _cross_lane_headway(self):

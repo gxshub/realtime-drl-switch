@@ -76,7 +76,7 @@ class DelayTimeDistribution:
         """
         return np.all(np.array(data) >= 0) and np.sum(data) > 0
 
-    def generate_above(self, point):
+    def generate_from_above(self, point):
         """
         Generates a new Distribution object with bins above the given point.
 
@@ -103,7 +103,7 @@ class DelayTimeDistribution:
         new_probabilities = np.concatenate(([p_scaled], self.probabilities[index:]))
         return DelayTimeDistribution(new_bins, new_probabilities)
 
-    def generate_below(self, point):
+    def generate_from_below(self, point):
         """
         Generates a new Distribution object with bins below the given point.
 
@@ -140,23 +140,26 @@ class DelayTimeDistribution:
             index = indices_above[0]
             p = self.probabilities[index-1]
             p_new = p * (self.bins[index] - point) / (self.bins[index] - self.bins[index-1])
-            for i in range(index[0], len(self.probabilities)):
+            for i in range(index, len(self.probabilities)):
                 p_new += self.probabilities[i]
             return p_new
 
     def cumulative_probability_below(self, point):
-        if self.bins[-1] >= point:
+        if self.bins[0] >= point:
             return 0
-        elif self.bins[0] <= point:
+        elif self.bins[-1] <= point:
             return 1
         else:
             indices_below = np.where(self.bins < point)[0]
-            index = indices_below[0]
+            index = indices_below[-1]
             p = self.probabilities[index]
-            p_new = p * (point - self.bins[index+1]) / (self.bins[index+1] - self.bins[index])
+            p_new = p * (point - self.bins[index]) / (self.bins[index+1] - self.bins[index])
             for i in range(0, index):
                 p_new += self.probabilities[i]
             return p_new
+
+    def get_distribution(self):
+        return "Delay time distribution bins: {}, probabilities: {}".format(self.bins, self.probabilities)
 
     def print(self):
         print("Delay time distribution bins: {}, probabilities: {}".format(self.bins, self.probabilities))
