@@ -1,0 +1,175 @@
+
+mdp
+
+// constants
+const int MAX_CT=120; //max number of calls in total
+const int MIN_CC=4; //min num of consecutive calls to a sec constroller 
+
+// switch probabilities (to the primary controller)
+const double sw1 = 0.39348720457881686; 
+const double sw2 = 0.6107399723416943; 
+const double sw3 = 0.39348720457881686; 
+const double sw4 = 0.6107399723416943; 
+
+// exit probablities (from a secondary controller)
+const double ex1 = 0.44511475409836065; 
+const double ex2 = 0.29911699779249445; 
+const double ex3 = 0.3971674131461082; 
+const double ex4 = 0.3076798444588464; 
+
+// metric probabilities
+// 1st group
+const double lln1 = 0.030565346115888903;
+const double lln2 = 0.05167392370022204;
+const double lln3 = 0.027787133715055576;
+const double lln4 = 0.04847958297132928;
+// 2ed group
+const double lly1 = 0.18401240659805443;
+const double lly2 = 0.289108682487961;
+const double lly3 = 0.18373189626136746;
+const double lly4 = 0.2960034752389227;
+// 3rd group
+const double lgn1 = 0.07965599887212745;
+const double lgn2 = 0.08172092620894489;
+const double lgn3 = 0.07578309195015157;
+const double lgn4 = 0.08053866203301477;
+// 4th group
+const double lgy1 = 0.2819963344142112;
+const double lgy2 = 0.31736785951151997;
+const double lgy3 = 0.28556191759290445;
+const double lgy4 = 0.317984361424848;
+// 5th group
+const double gln1 = 0.006541660792330466;
+const double gln2 = 0.008016378788315695;
+const double gln3 = 0.005866172673178399;
+const double gln4 = 0.006631914277439907;
+// 6th group
+const double gly1 = 0.017594811786268153;
+const double gly2 = 0.011419014389111566;
+const double gly3 = 0.017177500842034354;
+const double gly4 = 0.011294526498696786;
+// 7th group
+const double ggn1 = 0.12572959255604116;
+const double ggn2 = 0.08662302834568471;
+const double ggn3 = 0.12478949141124958;
+const double ggn4 = 0.08592528236316246;
+// 8th group
+const double ggy1 = 1-lln1-lly1-lgn1-lgy1-gln1-gly1-ggn1;
+const double ggy2 = 1-lln2-lly2-lgn2-lgy2-gln2-gly2-ggn2;
+const double ggy3 = 1-lln3-lly3-lgn3-lgy3-gln3-gly3-ggn3;
+const double ggy4 = 1-lln4-lly4-lgn4-lgy4-gln4-gly4-ggn4;
+
+module swtich
+	
+    //switch location variable
+    loc : [0..4] init 0; 
+    // 0: initialise, 1: determinie config, 2: select controller, 3: run controller, 4: done
+    
+    // controller
+    ctrl: [0..1] init 0;
+    // 0: primary (default), 1: secondary
+
+    //configuration
+    conf: [0..4] init 0;
+    // 0: unspecified config, 1..4: configs
+
+    //total count of calls
+    ct: [0..MAX_CT] init 0;
+
+    // count of consecutive calls to a secondary control
+    cc: [0..MAX_CT] init 0;
+
+    //safety metrics
+    headway: [0..1] init 1;
+    ttc: [0..1] init 1;
+    onlane: [0..1] init 1;
+    // 0: unsafe, 1: safe 
+
+    // determinie configuration
+    [] (loc=0) & (conf=0) & (ct < MAX_CT) -> (loc'=1) & (conf'=1);
+    [] (loc=0) & (conf=0) & (ct < MAX_CT) -> (loc'=1) & (conf'=2);
+    [] (loc=0) & (conf=0) & (ct < MAX_CT) -> (loc'=1) & (conf'=3);
+    [] (loc=0) & (conf=0) & (ct < MAX_CT) -> (loc'=1) & (conf'=4);
+
+    // switch to the primary controller or a secondary controller
+    [] (loc=1) & (conf=1) -> sw1 : (loc'=2) & (ctrl'=0) + (1-sw1) : (loc'=2) & (ctrl'=1);
+    [] (loc=1) & (conf=2) -> sw2 : (loc'=2) & (ctrl'=0) + (1-sw2) : (loc'=2) & (ctrl'=1);  
+    [] (loc=1) & (conf=3) -> sw3 : (loc'=2) & (ctrl'=0) + (1-sw3) : (loc'=2) & (ctrl'=1);
+    [] (loc=1) & (conf=4) -> sw4 : (loc'=2) & (ctrl'=0) + (1-sw4) : (loc'=2) & (ctrl'=1);
+
+    // run the controller    
+    [] (loc=2) & (conf=1) & (ct < MAX_CT) & (cc < MAX_CT) -> 
+        lln1 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lly1 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        lgn1 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lgy1 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        gln1 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        gly1 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        ggn1 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        ggy1 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1);
+                             
+    [] (loc=2) & (conf=2) & (ct < MAX_CT) & (cc < MAX_CT) -> 
+        lln2 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lly2 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        lgn2 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lgy2 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) +  
+        gln2 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        gly2 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) +  
+        ggn2 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        ggy2 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1);
+                             
+    [] (loc=2) & (conf=3) & (ct < MAX_CT) & (cc < MAX_CT) -> 
+        lln3 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lly3 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        lgn3 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) +  
+        lgy3 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        gln3 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        gly3 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) + 
+        ggn3 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        ggy3 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1);
+
+    [] (loc=2) & (conf=4) & (ct < MAX_CT) & (cc < MAX_CT) -> 
+        lln4 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) + 
+        lly4 : (loc'=3) & (headway'=0) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) +
+        lgn4 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) +
+        lgy4 : (loc'=3) & (headway'=0) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) +
+        gln4 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) +
+        gly4 : (loc'=3) & (headway'=1) & (ttc'=0) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1) +
+        ggn4 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=0) & (ct'=ct+1) & (cc'=cc+1) +
+        ggy4 : (loc'=3) & (headway'=1) & (ttc'=1) & (onlane'=1) & (ct'=ct+1) & (cc'=cc+1);
+    
+    // for primary controller, return
+    [] (loc=3) & (ctrl=0) -> (loc'=4) & (headway'=1) & (ttc'=1) & (onlane'=1) & (cc'=0);
+
+    // for a second controller, stay or return
+    [] (loc=3) & (ctrl=1) & (cc < MIN_CC) -> (loc'=2);
+    [] (loc=3) & (ctrl=1) & (cc >= MIN_CC) & (conf=1) -> (1-ex1): (loc'=2) + ex1: (loc'=4); 
+    [] (loc=3) & (ctrl=1) & (cc >= MIN_CC) & (conf=2) -> (1-ex2): (loc'=2) + ex2: (loc'=4); 
+    [] (loc=3) & (ctrl=1) & (cc >= MIN_CC) & (conf=3) -> (1-ex3): (loc'=2) + ex3: (loc'=4); 
+    [] (loc=3) & (ctrl=1) & (cc >= MIN_CC) & (conf=4) -> (1-ex4): (loc'=2) + ex4: (loc'=4); 
+            
+    // reset
+    [] (loc=4) -> (loc'=0) & (conf'=0) & (ctrl'=0) & (headway'=1) & (ttc'=1) & (onlane'=1) & (cc'=0);
+    
+    // terminal state, loop
+    [] (loc=0) & (ct = MAX_CT) -> (loc'=0) & (ct' = MAX_CT);
+    
+endmodule
+
+// rewards
+rewards "ctrl_cost"
+    [] loc=2 & ctrl=0 : 1/MAX_CT;
+    [] loc=2 & ctrl=1 : 2/MAX_CT;
+endrewards
+
+rewards "headway_cost"
+    [] loc=3 & headway=0 : 1/MAX_CT;
+endrewards
+
+rewards "ttc_cost"
+    [] loc=3 & ttc=0 : 1/MAX_CT;
+endrewards
+
+rewards "onlane_cost"
+    [] loc=3 & onlane=0 : 1/MAX_CT;
+endrewards

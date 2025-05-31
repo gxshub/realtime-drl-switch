@@ -3,8 +3,8 @@ from typing import List, TypeVar, Union, Dict
 import numpy as np
 from tqdm import tqdm
 
-from rt_drl_safeguard.controller import Controller
-from rt_drl_safeguard.utils.randomization import DelayTimeDistribution, SwitchConfigurationSampler
+from rt_drl_switch.controller import Controller
+from rt_drl_switch.utils.randomization import DelayTimeDistribution, SwitchConfigurationSampler
 
 RTEnv = TypeVar("RTEnv")
 

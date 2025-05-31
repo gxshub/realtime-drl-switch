@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from rt_drl_safeguard.factory import load_agent_class, load_environment
-from rt_drl_safeguard.rule_based_controller import TtcBasedController
-from rt_drl_safeguard.utils.configuration_manager import load_rule_based_ctrl_configs, load_rule_based_ctrl_config
+from rt_drl_switch.factory import load_agent_class, load_environment
+from rt_drl_switch.rule_based_controller import TtcBasedController
+from rt_drl_switch.utils.configuration_manager import load_rule_based_ctrl_configs, load_rule_based_ctrl_config
 
 
 class Controller:

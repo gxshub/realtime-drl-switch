@@ -3,7 +3,7 @@ import json
 import os
 
 
-from rt_drl_safeguard.utils.randomization import SwitchConfigurationSampler
+from rt_drl_switch.utils.randomization import SwitchConfigurationSampler
 
 
 def load_config(file_path):

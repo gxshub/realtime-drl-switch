@@ -23,7 +23,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
 from tqdm import tqdm
 
-from rt_drl_safeguard.factory import load_agent_class, load_environment
+from rt_drl_switch.factory import load_agent_class, load_environment
 
 OUTPUT_FOLDER = "eval_results"
 

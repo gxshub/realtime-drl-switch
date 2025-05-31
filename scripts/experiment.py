@@ -24,12 +24,12 @@ from typing import TypeVar
 from docopt import docopt
 from stable_baselines3.common.logger import configure
 
-from rt_drl_safeguard.controller import Controller
-from rt_drl_safeguard.factory import load_agent_class, load_environment
-from rt_drl_safeguard.switch import Switch
-from rt_drl_safeguard.utils.configuration_manager import load_rule_based_ctrl_configs, load_switch_random_params, \
+from rt_drl_switch.controller import Controller
+from rt_drl_switch.factory import load_agent_class, load_environment
+from rt_drl_switch.switch import Switch
+from rt_drl_switch.utils.configuration_manager import load_rule_based_ctrl_configs, load_switch_random_params, \
     load_config
-from rt_drl_safeguard.utils.randomization import DelayTimeDistribution
+from rt_drl_switch.utils.randomization import DelayTimeDistribution
 
 Agent = TypeVar("Agent")
 

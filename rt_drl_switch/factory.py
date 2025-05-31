@@ -11,7 +11,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from rt_drl_safeguard.highway_env_v2 import HighwayEnvV2
+from rt_drl_switch.highway_env_v2 import HighwayEnvV2
 
 logger = logging.getLogger(__name__)
 
